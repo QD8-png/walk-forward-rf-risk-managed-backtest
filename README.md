@@ -60,7 +60,7 @@ Architectural upgrade from single-asset vectorized backtesting to a shared-capit
 | :--- | :--- | :--- |
 | **Bug Fix** | Look-Ahead Future Leakage | Training slices now strictly subtract `future_return_days` (5 days) from the training boundary. This purge gap prevents the labels from peeking into the closing prices of the out-of-sample test set. |
 | **Bug Fix** | Serial Returns Compounding Bias | Corrected the daily return calculation. Daily portfolio returns are now calculated as a weighted parallel sum across assets: `capital *= (1 + Σ(return_i × weight_i))` instead of sequential compounding, matching standard clearing house guidelines. |
-| **Bug Fix** | Fixed-Tick Stop-Loss Bias | Replaced the rigid absolute stop-loss (e.g. $0.05) with a **2% adaptive stop-loss** relative to the purchase-day Low. This eliminates scale bias, ensuring high-priced blue-chip stocks are not immediately stopped out by normal daily volatility. |
+| **Bug Fix** | Fixed-Tick Stop-Loss Bias | Replaced the rigid absolute stop-loss (e.g. $0.05) with a **dynamic ATR-based volatility stop-loss** (`Stop = Low_entry - 2.0 × ATR_entry`). This eliminates scale bias, ensuring high-priced blue-chip stocks are not immediately stopped out by normal daily volatility. |
 | **Bug Fix** | Latest Features Edge Truncation | Excluded the target labels from the global `dropna` pre-processing. NaNs are only dropped dynamically during model training, preserving the latest 5 days of valid feature matrices for real-time out-of-sample forecasting. |
 | **Optimization** | Class Imbalance Bias | Integrated `class_weight='balanced'` in the rolling `RandomForestClassifier` instantiation, preventing prediction bias in highly asymmetric market regimes (e.g., bear or choppy markets). |
 | **Optimization** | Rigid Trend-Following Bottleneck | Upgraded the rigid buy filter (`KDJ_J < 20`) to be trend-adaptive. Under strong long-term momentum (`ma120_slope > 0.01`) or high model conviction (`y_prob > 0.65`), the KDJ filter is bypassed to prevent missing strong breakouts. |
@@ -114,7 +114,7 @@ Designed around the quantitative trading principle: **Cut losses short, let prof
 | Priority | Trigger / Rule | Action | Risk Category |
 | :---: | :--- | :---: | :--- |
 | **1 (Highest)** | Close falls below the Bull-Bear Line | Full Liquidation | Structural Trend Breakdown |
-| **2** | Close < 2% below purchase-day Low | Full Liquidation | Adaptive Hard Stop-Loss |
+| **2** | Close < Low_entry - λ×ATR_entry | Full Liquidation | ATR Volatility Stop-Loss |
 | **3** | floating profit < 3% AND model turns bearish | Full Liquidation | AI Defensive Take-Profit |
 | **4** | Floating profit ≥ 3% AND price drops 5% from peak | Full Liquidation | Trailing Stop-Profit Lock |
 | **5** | Close ≥ BBI + 3% AND daily return ≥ 2% | Halve Position (50%) | Ladder Profit Reduction |
@@ -186,7 +186,8 @@ config = StrategyConfig(
     portfolio_capital=1000000.0,  # Initial AUM
     max_holdings=4,               # Maximum portfolio holdings
     max_weight_per_stock=0.25,     # Single-asset exposure cap
-    adaptive_stop_pct=0.02,       # 2% adaptive stop-loss
+    atr_period=14,                # ATR lookback window for stop-loss
+    atr_multiplier=2.0,           # ATR volatility stop-loss multiplier
     train_window=500,             # Walk-forward rolling training window
     retrain_every=60,             # Retraining frequency (days)
     n_shuffles=50                 # Monte Carlo iterations

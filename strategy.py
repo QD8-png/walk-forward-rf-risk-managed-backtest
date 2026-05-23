@@ -58,8 +58,9 @@ class StrategyConfig:
     big_bull_threshold: float = 0.02    # Daily return required for BBI profit ladder (2%)
     cooldown_days: int = 120            # Asset cooling period post-liquidation (days)
     
-    # Adaptive Stop-Loss
-    adaptive_stop_pct: float = 0.02     # Adaptive Stop-loss at 2% below purchase day's LOW
+    # ATR Volatility-Based Stop-Loss
+    atr_period: int = 14                # ATR calculation lookback window
+    atr_multiplier: float = 2.0         # Stop = Low_entry - atr_multiplier × ATR_entry
     
     # Trailing Profit-Take (TP)
     trailing_activate_pct: float = 0.03 # floating profit trigger for trailing stop (3%)
@@ -183,8 +184,16 @@ def prepare_features(df: pd.DataFrame, config: StrategyConfig) -> pd.DataFrame:
                 + df['收盘'].rolling(b3).mean() + df['收盘'].rolling(b4).mean()) / 4
     df['BBI偏离'] = df['收盘'] / df['BBI'] - 1
 
+    # ATR (Average True Range) for dynamic volatility-based stop-loss
+    prev_close = df['收盘'].shift(1)
+    tr1 = df['高'] - df['低']
+    tr2 = (df['高'] - prev_close).abs()
+    tr3 = (df['低'] - prev_close).abs()
+    df['TR'] = pd.concat([tr1, tr2, tr3], axis=1).max(axis=1)
+    df['ATR'] = df['TR'].ewm(span=config.atr_period, adjust=False).mean()
+
     # Cleanup invalid / missing data rows
-    required_cols = DEFAULT_FEATURE_COLS + ['多空线', 'BBI', '收盘', 'KDJ_J', 'MA120_slope']
+    required_cols = DEFAULT_FEATURE_COLS + ['多空线', 'BBI', '收盘', 'KDJ_J', 'MA120_slope', 'ATR']
     df.replace([np.inf, -np.inf], np.nan, inplace=True)
     df = df.dropna(subset=required_cols).reset_index(drop=True)
     return df
@@ -294,6 +303,7 @@ def process_single_asset(ticker: str, df: pd.DataFrame, config: StrategyConfig, 
         'bbi': sliced['BBI'].values,
         'kdj_j': sliced['KDJ_J'].values,
         'ma120_slope': sliced['MA120_slope'].values,
+        'atr': sliced['ATR'].values,
         'y_pred': predictions[first_valid:],
         'y_prob': probabilities[first_valid:],
     }
@@ -468,8 +478,8 @@ def portfolio_backtest_2024(all_assets: Dict[str, Dict[str, Any]], config: Strat
             holdings[stock_name] = Holding(
                 name=stock_name,
                 entry_price=asset['close'][local_idx],
-                # 2% Adaptive stop loss below day's low
-                entry_stop_price=asset['low'][local_idx] * (1.0 - config.adaptive_stop_pct),
+                # ATR volatility-based dynamic stop-loss: Stop = Low_entry - λ × ATR_entry
+                entry_stop_price=asset['low'][local_idx] - config.atr_multiplier * asset['atr'][local_idx],
                 max_price=asset['close'][local_idx],
                 position_weight=target_weight,
             )
@@ -673,7 +683,7 @@ def main() -> None:
         return
 
     # 3. Shared capital portfolio rotation backtest
-    print("\n3. 启动 2024 至今多资产共享资金池组合回测 (包含自适应止损)...")
+    print("\n3. 启动 2024 至今多资产共享资金池组合回测 (包含 ATR 波动率自适应止损)...")
     actual_return, max_drawdown, values, dates = portfolio_backtest_2024(all_assets, config, verbose=True)
     
     # 4. Premium graph saving
