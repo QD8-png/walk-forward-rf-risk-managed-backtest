@@ -1,5 +1,5 @@
 # Multi-Asset Walk-Forward Random Forest Portfolio Rotation Strategy
-## (多资产海选轮动与多层级动态风险管理量化系统)
+## 多资产海选轮动与多层级动态风险管理量化系统
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 [![Python Version](https://img.shields.io/badge/python-3.10%2B-blue.svg)](https://www.python.org/downloads/)
@@ -7,127 +7,184 @@
 
 An institutional-grade quantitative backtesting framework combining rolling **non-linear Machine Learning forecasts** with **multi-frequency structural risk controls**, **portfolio-level shared-capital rotation**, and **Monte Carlo statistical validation**.
 
-本项目实现了一个“预测交给机器学习，风控留给结构化规则”的动态组合轮动交易系统。
+> **Core Philosophy**: *Predict with Machine Learning, control with Structural Rules.*
+>
+> 核心哲学：预测交给机器学习，风控留给结构化规则。
 
 ---
 
-## 📈 1. System Architecture (系统架构)
-
-The V4.0 system manages a shared-capital pool, executing cross-sectional scanning and ML confidence-based portfolio rotation on a daily scale.
+## 📈 System Architecture
 
 ```
-       [Market Data Pool] → Feature Engineering (16 overlays)
-                                      ↓
-                     [Walk-Forward Rolling RF Training]
-                      (500-day window, 60-day step)
-                        * Leak-free Train/Test slice
-                                      ↓
-                     [Cross-Sectional Rank & Screening]
-                        * ML Probability Sorting
-                        * 5-Layer Entry Filters
-                                      ↓
-                     [Shared Capital Pool Allocation]
-                      (CNY 1,000,000, Max 4 Holdings)
-                      (Single Stock Limit: 25% Weight)
-                                      ↓
-                     [Multi-Stage Asymmetric Exit Engine]
-                      * 2% Adaptive Stop-Loss (Price-scaled)
-                      * Trailing Stop-Profit (Big fish)
-                      * BBI-Deviation Position Halving
-                                      ↓
-                     [Monte Carlo Permutation Validation]
+    ┌─────────────────────────────────────────────────┐
+    │              Market Data Pool (CSV / yfinance)   │
+    └──────────────────────┬──────────────────────────┘
+                           ▼
+              Feature Engineering (16 technical overlays)
+                           ▼
+            ┌──────────────────────────────────┐
+            │  Walk-Forward Rolling RF Training │
+            │  (500-day window, 60-day step)   │
+            │  ★ Leak-free purged train slice  │
+            └──────────────┬───────────────────┘
+                           ▼
+            ┌──────────────────────────────────┐
+            │  Cross-Sectional Rank & Screen   │
+            │  • ML probability sorting        │
+            │  • 5-layer concurrent filters    │
+            └──────────────┬───────────────────┘
+                           ▼
+            ┌──────────────────────────────────┐
+            │  Shared Capital Pool Allocation   │
+            │  ¥1,000,000 · Max 4 holdings     │
+            │  Single stock cap: 25% weight    │
+            └──────────────┬───────────────────┘
+                           ▼
+            ┌──────────────────────────────────┐
+            │  Multi-Stage Asymmetric Exits    │
+            │  • 2% adaptive stop-loss         │
+            │  • Trailing stop-profit          │
+            │  • BBI ladder position halving   │
+            └──────────────┬───────────────────┘
+                           ▼
+              Monte Carlo Permutation Validation
+              (p-value statistical significance)
 ```
 
 ---
 
-## 🚨 2. Version History & Quantitative Audits (版本迭代与重大审计日志)
+## 🚨 Version History & Quantitative Audit Log
 
-| Version | Release Date | Key Upgrades & Architectural Changes | Quant & Mathematical Audits (量化与数学审计) |
-| :--- | :---: | :--- | :--- |
-| **v1.0 - v3.0** | *Historical* | Single-Asset backtester using fixed price tick stop-losses. | ⚠️ **High-Risk Vulnerabilities Identified:**<br>1. **Look-ahead data leakage** in rolling walk-forward training windows.<br>2. **Serial return compounding error** in daily return updates.<br>3. **Stop-loss scale bias** on high-priced assets. |
-| **v4.0 (Current)** | **2026-05-23** | 1. Upgraded to **Multi-Asset Shared Capital Pool Rotation**.<br>2. Implemented **2% Adaptive Stop-Loss** based on purchase-day low.<br>3. Integrated **ProcessPoolExecutor** for parallel computing.<br>4. Added **LaTeX Booktabs Table** auto-generation. | ✅ **Audit Resolution Passed:**<br>1. **Leakage Purged**: Sliced training window by subtracting `future_return_days` (5 days).<br>2. **Parallel Return Update**: Summed weighted returns first, updating capital pool once daily: `capital = capital * (1 + sum(daily_returns * weights))`.<br>3. **Dynamic wind-risk**: Price-scaled 2% stop loss, eliminating fixed tick bias. |
+### v4.0 — Current Release (2026-05-23)
+
+**Architecture upgrade**: Single-asset backtester → Multi-asset shared-capital pool rotation.
+
+| Category | What Changed | Technical Detail |
+| :--- | :--- | :--- |
+| 🔴 **Bug Fix** | Walk-forward look-ahead data leakage eliminated | Training window now subtracts `future_return_days` (5 days) to prevent target labels from seeing test-set closing prices. |
+| 🔴 **Bug Fix** | Serial return compounding error corrected | Daily returns from all holdings are summed in parallel first, then applied to the capital pool once: `capital *= (1 + Σ(return_i × weight_i))`. |
+| 🔴 **Bug Fix** | Fixed-tick stop-loss scale bias removed | Replaced absolute ¥0.05 stop-loss with **2% adaptive stop-loss** relative to purchase-day low. High-priced stocks (e.g. Moutai at ¥1500+) no longer get instantly stopped out by normal volatility. |
+| 🟢 **Feature** | Portfolio-level capital rotation | Shared ¥1M capital pool, cross-sectional ML confidence ranking, max 4 concurrent holdings at 25% weight each. |
+| 🟢 **Feature** | Multiprocessing acceleration | `ProcessPoolExecutor` + `n_jobs=-1` for parallel walk-forward training across assets. |
+| 🟢 **Feature** | LaTeX Booktabs table generator | Auto-generates publication-ready three-line tables for academic papers. |
+
+### v1.0–v3.0 — Historical
+
+Single-asset independent backtester with fixed-price stop-losses. Contained the three critical vulnerabilities listed above (leakage, compounding, scale bias).
 
 ---
 
-## 🛠️ 3. Key Components (核心功能组件)
+## 🛠️ Key Components
 
-### A. Feature Engineering (16 Features)
-*   **Momentum & Lags**: Lagged returns (1/2/3 day) to capture short-term memory.
-*   **Mean Reversion**: RSI-14, KDJ-J oscillator detecting overbought/oversold boundaries.
-*   **Trend Deviation**: Price ratios relative to MA5/10/60, EMA13, BBI, and Bull-Bear line.
-*   **Market Structure**: Day-on-day volume changes, price amplitude, rolling volatility.
+### 1. Feature Engineering (16 Features)
 
-### B. Leak-Free Walk-Forward ML Engine
-To adapt to market regime drift without overfitting, models are retrained every **60 days** using a rolling **500-day window**. 
-We strictly enforce a **5-day gap** at the end of each training slice to ensure the target label (future 5-day return) does not leak test-set closing prices into the training set:
+| Category | Features | Purpose |
+| :--- | :--- | :--- |
+| Momentum | Lagged returns (1/2/3 day) | Short-term memory capture |
+| Mean Reversion | RSI-14, KDJ-J oscillator | Overbought/oversold detection |
+| Trend Deviation | Price deviation from MA5/10/60, EMA13, BBI, Bull-Bear Line | Structural trend positioning |
+| Market Structure | Volume change, amplitude, rolling volatility, MA crossover | Regime and microstructure signals |
+
+### 2. Leak-Free Walk-Forward ML Engine
+
+Models retrain every **60 days** on a rolling **500-day** window. A strict **5-day purge gap** at the training boundary prevents future label contamination:
+
 ```python
-# Purged training window slicing
+# Purged training window — no test-set price information leaks into labels
 X_train = X[train_end - train_window : train_end - config.future_return_days]
 y_train = y[train_end - train_window : train_end - config.future_return_days]
+X_test  = X[train_end : test_end]
 ```
 
-### C. 5-Layer Cross-Sectional Entry Filter
-For an asset to enter the rotation pool, it must pass five concurrent tests:
-1.  **ML Signal**: Random Forest predicts positive direction (`y_pred == 1`).
-2.  **Long-term Trend**: MA120 slope > 0 (filter out structural bear markets).
-3.  **Fear Regime**: KDJ J-value < 20 (exploit panic oversold regimes).
-4.  **Regime Strength**: Closing price $\ge$ Bull-Bear Line.
-5.  **Risk Cooldown**: At least 120 trading days have elapsed since the last liquidation of this asset.
+### 3. Five-Layer Cross-Sectional Entry Filter
 
-### D. Asymmetric exit Mechanics
-We operate on an asymmetric design: **catch small swing profits quickly, let large-trend profits run.**
+All five conditions must be satisfied **simultaneously** for a buy signal:
 
-| Exit Level | Trigger Condition | Action | Rationale |
+| Layer | Condition | Rationale |
+| :---: | :--- | :--- |
+| 1 | RF predicts bullish (`y_pred == 1`) | ML conviction gate |
+| 2 | MA120 slope > 0 | Long-term structural uptrend |
+| 3 | KDJ J-value < 20 | Panic oversold / fear regime |
+| 4 | Price ≥ Bull-Bear Line | Regime strength confirmation |
+| 5 | ≥ 120 days since last exit on this asset | Risk cooldown period |
+
+### 4. Asymmetric Exit Mechanics
+
+Design principle: **catch small fish quickly, let big fish run.**
+
+| Priority | Trigger | Action | Category |
 | :---: | :--- | :---: | :--- |
-| **Level 1 (Forced)** | Price < Bull-Bear Line | Liquidate | Structural trend breakdown |
-| **Level 2 (Risk)** | Price < Purchase-Day Low * (1 - 2%) | Liquidate | **2% Adaptive Stop-Loss** (no scale bias) |
-| **Level 3 (Swing)** | Floating profit < 3% AND ML turns bearish | Liquidate | Model-driven exit (lock minor gains) |
-| **Level 4 (Trend)** | Floating profit $\ge$ 3% AND price drops 5% from peak | Liquidate | Trailing Stop-Profit (catch big trends) |
-| **Level 5 (Scale)** | Price $\ge$ BBI + 3% AND daily bullish candle $\ge$ 2% | Halve Position | BBI profit-ladder reduction |
+| 1 (Highest) | Price < Bull-Bear Line | Full exit | Structural stop |
+| 2 | Price < Entry-day Low × 0.98 | Full exit | 2% adaptive stop-loss |
+| 3 | Unrealized gain < 3% AND ML turns bearish | Full exit | Swing take-profit |
+| 4 | Unrealized gain ≥ 3% AND price drops 5% from peak | Full exit | Trailing stop-profit |
+| 5 | Price ≥ BBI+3% AND bullish candle ≥ 2% | Halve position | BBI ladder reduction |
+
+### 5. Dynamic Position Sizing
+
+Capital allocation scales linearly with ML prediction confidence:
+
+```
+ML Confidence 50%  →  0% allocation (no trade)
+ML Confidence 60%  →  33% allocation
+ML Confidence 70%  →  67% allocation
+ML Confidence 80%  →  100% allocation (full weight)
+```
+
+### 6. Monte Carlo Permutation Test
+
+Statistical validation that ML predictions add genuine alpha beyond structural rules:
+1. Shuffle ML prediction signals randomly (keeping technical indicators intact).
+2. Re-run the full backtest 50+ times to build a null return distribution.
+3. Compute empirical *p*-value. If *p* < 0.05, reject the null hypothesis.
 
 ---
 
-## 📊 4. Performance & Validation (绩效与统计验证)
+## 📂 Project Structure
 
-### Dynamic Position Sizing
-Single-stock portfolio allocation dynamically scales with ML probability outputs (confidence):
-$$\text{Weight} = \min\left( \max\left( \text{Min\_Size}, (P_{\text{ML}} - 0.5) \times \text{Scale} \right) \times \text{Max\_Weight\_Per\_Stock}, \text{Remaining\_Capacity} \right)$$
-This limits capital allocation during low-conviction periods and focuses leverage on high-probability setups.
-
-### Monte Carlo Permutation Test
-To prove that our ML models add real value beyond the structural risk rules, we run a **Permutation Test**:
-1.  Shuffle ML prediction signals randomly while keeping raw technical indicators aligned.
-2.  Run the full backtest 50+ times to construct a randomized return distribution.
-3.  Compute $p$-value. A $p$-value < 0.05 rejects the null hypothesis that ML adds no value.
+```
+├── strategy.py      # Core: features, walk-forward RF, portfolio rotation, exits, MC validation
+├── README.md        # This document
+├── LICENSE          # MIT License
+└── .gitignore
+```
 
 ---
 
-## 💻 5. Usage & Local Run (运行与配置)
+## 💻 Quick Start
 
 ### Requirements
+
 ```bash
 pip install numpy pandas matplotlib scikit-learn yfinance
 ```
 
-### Run Backtester
-Use the designated Python environment to run the strategy:
+### Run
+
 ```bash
-& 'C:\Users\qwe\AppData\Local\Programs\Python\Python310\python.exe' strategy.py
+python strategy.py
 ```
 
-### Parameter Tuning
-All quantitative limits are centralized in the `StrategyConfig` class for easy tuning:
+The system will automatically download historical data via `yfinance`, run walk-forward training on all assets in parallel, execute the 2024-present portfolio rotation backtest, and output an equity curve plot to `plots/`.
+
+### Configuration
+
+All parameters are centralized in `StrategyConfig` — no magic numbers scattered in code:
+
 ```python
 config = StrategyConfig(
-    portfolio_capital=1000000.0,
+    portfolio_capital=1_000_000.0,
     max_holdings=4,
     max_weight_per_stock=0.25,
-    adaptive_stop_pct=0.02,   # 2% dynamic stop
-    n_shuffles=50,            # Monte Carlo shuffles
+    adaptive_stop_pct=0.02,     # 2% dynamic stop-loss
+    train_window=500,
+    retrain_every=60,
+    n_shuffles=50,              # Monte Carlo iterations
 )
 ```
 
 ---
 
 ## 📄 License
-This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
+
+MIT License — see [LICENSE](LICENSE) for details.
