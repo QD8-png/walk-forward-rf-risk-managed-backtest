@@ -3,188 +3,192 @@
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 [![Python Version](https://img.shields.io/badge/python-3.10%2B-blue.svg)](https://www.python.org/downloads/)
-[![Quant Grade](https://img.shields.io/badge/Grade-Institutional-success.svg)](#)
 
-An institutional-grade quantitative backtesting framework combining rolling **non-linear Machine Learning forecasts** with **multi-frequency structural risk controls**, **portfolio-level shared-capital rotation**, and **Monte Carlo statistical validation**.
+这是一个多资产量化交易回测系统，结合了滚动式机器学习（Random Forest）预测与多频段结构化风险控制、组合级别共享资金池轮动，以及蒙特卡洛统计检验验证。
 
-> **Core Philosophy**: *Predict with Machine Learning, control with Structural Rules.*
->
-> 核心哲学：预测交给机器学习，风控留给结构化规则。
+主要设计思路在于“以机器学习捕捉超额收益，以结构化规则控制系统风险”。
 
 ---
 
-## 📈 System Architecture
+## 核心系统架构
 
 ```
     ┌─────────────────────────────────────────────────┐
     │              Market Data Pool (CSV / yfinance)   │
     └──────────────────────┬──────────────────────────┘
                            ▼
-              Feature Engineering (16 technical overlays)
+               Feature Engineering (16 technical overlays)
                            ▼
-            ┌──────────────────────────────────┐
-            │  Walk-Forward Rolling RF Training │
-            │  (500-day window, 60-day step)   │
-            │  ★ Leak-free purged train slice  │
-            └──────────────┬───────────────────┘
+             ┌──────────────────────────────────┐
+             │  Walk-Forward Rolling RF Training │
+             │  (500-day window, 60-day step)   │
+             │  * Purged training slice         │
+             └──────────────┬───────────────────┘
                            ▼
-            ┌──────────────────────────────────┐
-            │  Cross-Sectional Rank & Screen   │
-            │  • ML probability sorting        │
-            │  • 5-layer concurrent filters    │
-            └──────────────┬───────────────────┘
+             ┌──────────────────────────────────┐
+             │  Cross-Sectional Rank & Screen   │
+             │  - ML probability sorting        │
+             │  - 5-layer concurrent filters    │
+             └──────────────┬───────────────────┘
                            ▼
-            ┌──────────────────────────────────┐
-            │  Shared Capital Pool Allocation   │
-            │  ¥1,000,000 · Max 4 holdings     │
-            │  Single stock cap: 25% weight    │
-            └──────────────┬───────────────────┘
+             ┌──────────────────────────────────┐
+             │  Shared Capital Pool Allocation   │
+             │  ¥1,000,000 / Max 4 holdings     │
+             │  Single stock cap: 25% weight    │
+             └──────────────┬───────────────────┘
                            ▼
-            ┌──────────────────────────────────┐
-            │  Multi-Stage Asymmetric Exits    │
-            │  • 2% adaptive stop-loss         │
-            │  • Trailing stop-profit          │
-            │  • BBI ladder position halving   │
-            └──────────────┬───────────────────┘
+             ┌──────────────────────────────────┐
+             │  Multi-Stage Asymmetric Exits    │
+             │  - 2% adaptive stop-loss         │
+             │  - Trailing stop-profit          │
+             │  - BBI ladder position halving   │
+             └──────────────┬───────────────────┘
                            ▼
-              Monte Carlo Permutation Validation
-              (p-value statistical significance)
+               Monte Carlo Permutation Validation
+               (p-value statistical significance)
 ```
 
 ---
 
-## 🚨 Version History & Quantitative Audit Log
+## 版本迭代历史与量化审计日志
 
-### v4.0 — Current Release (2026-05-23)
+### v4.0 (当前版本)
 
-**Architecture upgrade**: Single-asset backtester → Multi-asset shared-capital pool rotation.
+架构升级：单资产独立回测器升级为多资产共享资金池轮动系统，修复了前期版本中的几个关键逻辑漏洞。
 
-| Category | What Changed | Technical Detail |
+| 类别 | 变更内容 | 技术细节 |
 | :--- | :--- | :--- |
-| 🔴 **Bug Fix** | Walk-forward look-ahead data leakage eliminated | Training window now subtracts `future_return_days` (5 days) to prevent target labels from seeing test-set closing prices. |
-| 🔴 **Bug Fix** | Serial return compounding error corrected | Daily returns from all holdings are summed in parallel first, then applied to the capital pool once: `capital *= (1 + Σ(return_i × weight_i))`. |
-| 🔴 **Bug Fix** | Fixed-tick stop-loss scale bias removed | Replaced absolute ¥0.05 stop-loss with **2% adaptive stop-loss** relative to purchase-day low. High-priced stocks (e.g. Moutai at ¥1500+) no longer get instantly stopped out by normal volatility. |
-| 🟢 **Feature** | Portfolio-level capital rotation | Shared ¥1M capital pool, cross-sectional ML confidence ranking, max 4 concurrent holdings at 25% weight each. |
-| 🟢 **Feature** | Multiprocessing acceleration | `ProcessPoolExecutor` + `n_jobs=-1` for parallel walk-forward training across assets. |
-| 🟢 **Feature** | LaTeX Booktabs table generator | Auto-generates publication-ready three-line tables for academic papers. |
+| Bug 修复 | 消除前瞻偏差（未来数据泄漏） | 在滚动训练中，训练集的尾部回缩 `future_return_days`（5天），以防止标签（Target）提前知晓测试集首日的收盘价格。 |
+| Bug 修复 | 修正持仓每日收益的复利累加计算 | 将每日多只持仓的收益率按权重进行空间并行求和，再统一作用于资金池更新：`capital *= (1 + Σ(return_i × weight_i))`，避免了串行复利相乘导致的计算偏差。 |
+| Bug 修复 | 移除绝对价格止损，改为百分比自适应止损 | 将原先固定的 ¥0.05 绝对金额止损替换为**基于买入日 Low 价的 2% 自适应百分比止损**。解决了高价股（如茅台）由于正常日内波动被瞬间扫单止损的问题。 |
+| 功能新增 | 组合级别共享资金池轮动机制 | 共享 100 万初始资金，全市场多资产交叉对比。根据机器学习模型的预测概率（置信度）进行截面排序，每日最多持仓 4 只股票，单只权重上限 25%。 |
+| 功能新增 | 多进程并发加速滚动训练 | 引入 `ProcessPoolExecutor`，针对不同资产的特征工程和 walk-forward 滚动训练进行多核并行计算，大幅提升回测速度。 |
+| 功能新增 | LaTeX 学术图表自动生成 | 自动生成符合学术规范的 LaTeX Booktabs 三线表，用于展示核心回测指标。 |
 
-### v1.0–v3.0 — Historical
+### v1.0 - v3.0 (历史版本)
 
-Single-asset independent backtester with fixed-price stop-losses. Contained the three critical vulnerabilities listed above (leakage, compounding, scale bias).
+单资产独立回测，使用固定价位止损。回测逻辑中存在上述的数据泄漏、持仓收益计算偏差以及高价股止损偏置问题。现已废弃。
 
 ---
 
-## 🛠️ Key Components
+## 系统核心模块
 
-### 1. Feature Engineering (16 Features)
+### 1. 特征工程 (16个技术特征)
 
-| Category | Features | Purpose |
+| 分类 | 特征指标 | 作用说明 |
 | :--- | :--- | :--- |
-| Momentum | Lagged returns (1/2/3 day) | Short-term memory capture |
-| Mean Reversion | RSI-14, KDJ-J oscillator | Overbought/oversold detection |
-| Trend Deviation | Price deviation from MA5/10/60, EMA13, BBI, Bull-Bear Line | Structural trend positioning |
-| Market Structure | Volume change, amplitude, rolling volatility, MA crossover | Regime and microstructure signals |
+| 动量特征 | 收益率滞后项 (Lag 1/2/3) | 捕捉短期日线级别的动量与记忆性 |
+| 均值回归 | RSI-14, KDJ-J 震荡指标 | 度量资产的超买超卖与短期情绪极值 |
+| 趋势偏离 | 收盘价与 MA5/10/60、EMA13、BBI、多空线的偏离度 | 确立中期和长期趋势的价格所处区间及乖离度 |
+| 市场结构 | 成交量变动率、日内振幅、滚动波动率、均线交叉 | 识别市场波动特征与结构性均线金叉/死叉信号 |
 
-### 2. Leak-Free Walk-Forward ML Engine
+### 2. 无前瞻偏差的滚动训练引擎
 
-Models retrain every **60 days** on a rolling **500-day** window. A strict **5-day purge gap** at the training boundary prevents future label contamination:
+模型每隔 **60天** 滚动重新训练一次，每次使用过去 **500天** 的历史数据。在训练集与测试集边界设置 **5天** 的净化间隔（Purge Gap），阻断未来信息泄露给当前训练样本的标签：
 
 ```python
-# Purged training window — no test-set price information leaks into labels
+# 净化训练区间 - 避免测试集期间的价格变动污染训练标签
 X_train = X[train_end - train_window : train_end - config.future_return_days]
 y_train = y[train_end - train_window : train_end - config.future_return_days]
 X_test  = X[train_end : test_end]
 ```
 
-### 3. Five-Layer Cross-Sectional Entry Filter
+### 3. 五重截面买入过滤机制
 
-All five conditions must be satisfied **simultaneously** for a buy signal:
+必须同时满足以下五项条件，系统才会在截面上产生买入备选信号：
 
-| Layer | Condition | Rationale |
+| 层级 | 判定条件 | 逻辑设计意图 |
 | :---: | :--- | :--- |
-| 1 | RF predicts bullish (`y_pred == 1`) | ML conviction gate |
-| 2 | MA120 slope > 0 | Long-term structural uptrend |
-| 3 | KDJ J-value < 20 | Panic oversold / fear regime |
-| 4 | Price ≥ Bull-Bear Line | Regime strength confirmation |
-| 5 | ≥ 120 days since last exit on this asset | Risk cooldown period |
+| 1 | 随机森林预测为上涨 (`y_pred == 1`) | 机器学习模型的看多方向准入 |
+| 2 | 120日均线斜率大于 0 (`MA120_slope > 0`) | 确保大趋势处于多头行情，过滤下行通道的交易 |
+| 3 | KDJ J值低于 20 (`KDJ_J < 20`) | 逆势安全边际：倾向于在短期超跌或恐慌情绪盘整时切入 |
+| 4 | 收盘价高于多空线 (`Price >= Bull-Bear Line`) | 中期多头趋势的确立与支撑确认 |
+| 5 | 距离该资产上一次止损/清仓天数大于 120天 | 强制冷却锁仓期，规避单只股票连续洗盘或单边阴跌的摩擦损耗 |
 
-### 4. Asymmetric Exit Mechanics
+### 4. 不对称退出止损止盈机制
 
-Design principle: **catch small fish quickly, let big fish run.**
+设计原则：**截断亏损，让利润奔跑**。
 
-| Priority | Trigger | Action | Category |
+| 优先级别 | 触发条件 | 执行操作 | 风险类别 |
 | :---: | :--- | :---: | :--- |
-| 1 (Highest) | Price < Bull-Bear Line | Full exit | Structural stop |
-| 2 | Price < Entry-day Low × 0.98 | Full exit | 2% adaptive stop-loss |
-| 3 | Unrealized gain < 3% AND ML turns bearish | Full exit | Swing take-profit |
-| 4 | Unrealized gain ≥ 3% AND price drops 5% from peak | Full exit | Trailing stop-profit |
-| 5 | Price ≥ BBI+3% AND bullish candle ≥ 2% | Halve position | BBI ladder reduction |
+| 1 (最高) | 收盘价跌破多空线 (Bull-Bear Line) | 全额清仓 | 中期趋势破位止损 |
+| 2 | 收盘价低于买入日最低价的 98% | 全额清仓 | 2% 自适应硬止损（以买入日 Low 为基准） |
+| 3 | 持仓利润不足 3% 且模型预测转为空头 | 全额清仓 | 微利状态下的机器学习防御性退出 |
+| 4 | 持仓浮盈曾达 3% 以上，但从最高点回撤达 5% | 全额清仓 | 移动止盈（锁定利润） |
+| 5 | 收盘价高于 BBI 均线 3% 且当日大涨超过 2% | 减仓 50% | 阶梯式减仓（在宽幅拉升中分批落袋） |
 
-### 5. Dynamic Position Sizing
+### 5. 动态仓位调整 (Position Sizer)
 
-Capital allocation scales linearly with ML prediction confidence:
+单只资产的资金分配权重并非固定，而是根据机器学习模型的预测概率（置信度）进行线性缩放：
 
 ```
-ML Confidence 50%  →  0% allocation (no trade)
-ML Confidence 60%  →  33% allocation
-ML Confidence 70%  →  67% allocation
-ML Confidence 80%  →  100% allocation (full weight)
+模型置信度 50%  -> 0% 仓位 (不交易)
+模型置信度 60%  -> 33% 目标仓位 (目标权重 = 25% * 33% = 8.25%)
+模型置信度 70%  -> 67% 目标仓位 (目标权重 = 25% * 67% = 16.75%)
+模型置信度 80%  -> 100% 目标仓位 (目标权重 = 25% * 100% = 25%)
 ```
 
-### 6. Monte Carlo Permutation Test
+### 6. 蒙特卡洛统计显著性检验
 
-Statistical validation that ML predictions add genuine alpha beyond structural rules:
-1. Shuffle ML prediction signals randomly (keeping technical indicators intact).
-2. Re-run the full backtest 50+ times to build a null return distribution.
-3. Compute empirical *p*-value. If *p* < 0.05, reject the null hypothesis.
+为了验证该量化策略的真实表现（特别是机器学习模型预测）是否确实提供了 Alpha，而仅是靠结构化交易规则或特定市场时段的巧合，系统内置了置换检验：
+1. 保持技术指标与市场价格时间序列不变，随机打乱机器学习的预测信号与置信度。
+2. 在打乱的信号下完整重跑多资产轮动回测，重复运行 N 次（如 50次），构建出无预测能力下的随机净值与收益分布（Null Distribution）。
+3. 计算真实策略收益在此随机分布中的排位，得出经验显著性 *p*-value。若 *p* < 0.05，则在统计学上拒绝“收益由随机因素主导”的假设。
 
 ---
 
-## 📂 Project Structure
+## 项目文件结构
 
 ```
-├── strategy.py      # Core: features, walk-forward RF, portfolio rotation, exits, MC validation
-├── README.md        # This document
-├── LICENSE          # MIT License
+├── strategy.py      # 主程序：包含特征构建、滚动训练、组合回测、蒙特卡洛及绘图
+├── README.md        # 本说明文档
+├── LICENSE          # MIT 许可证
 └── .gitignore
 ```
 
 ---
 
-## 💻 Quick Start
+## 快速开始
 
-### Requirements
+### 依赖库安装
+
+本系统主要依赖常规的数据分析与机器学习库：
 
 ```bash
 pip install numpy pandas matplotlib scikit-learn yfinance
 ```
 
-### Run
+### 运行回测
 
 ```bash
 python strategy.py
 ```
 
-The system will automatically download historical data via `yfinance`, run walk-forward training on all assets in parallel, execute the 2024-present portfolio rotation backtest, and output an equity curve plot to `plots/`.
+运行后，程序将：
+1. 自动调用 `yfinance` 下载默认的代表性股票/ETF 数据。
+2. 使用多进程对各个资产进行特征工程与无泄漏的 walk-forward 滚动训练。
+3. 执行多资产共享资金池组合回测，输出 2024 年至今的回测统计指标。
+4. 绘制精细的可视化资金净值曲线，并将图表保存至当前目录下的 `plots/` 文件夹中。
+5. 自动启动蒙特卡洛随机置换检验，并输出对应的显著性检验分析报告。
 
-### Configuration
+### 策略参数配置
 
-All parameters are centralized in `StrategyConfig` — no magic numbers scattered in code:
+策略的所有超参数及风控阈值均集中在 `StrategyConfig` 中进行管理，避免了代码内部的魔术数字：
 
 ```python
 config = StrategyConfig(
-    portfolio_capital=1_000_000.0,
-    max_holdings=4,
-    max_weight_per_stock=0.25,
-    adaptive_stop_pct=0.02,     # 2% dynamic stop-loss
-    train_window=500,
-    retrain_every=60,
-    n_shuffles=50,              # Monte Carlo iterations
+    portfolio_capital=1000000.0,  # 初始资金
+    max_holdings=4,               # 最大持仓数
+    max_weight_per_stock=0.25,     # 单只标的最大仓位限制
+    adaptive_stop_pct=0.02,       # 2% 自适应止损比例
+    train_window=500,             # 滚动训练窗口大小
+    retrain_every=60,             # 滚动重新训练频率
+    n_shuffles=50                 # 蒙特卡洛模拟次数
 )
 ```
 
 ---
 
-## 📄 License
+## 许可证
 
-MIT License — see [LICENSE](LICENSE) for details.
+本项目采用 MIT 许可证。详情请参阅 [LICENSE](LICENSE) 文件。
