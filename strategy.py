@@ -184,7 +184,7 @@ def prepare_features(df: pd.DataFrame, config: StrategyConfig) -> pd.DataFrame:
     df['BBI偏离'] = df['收盘'] / df['BBI'] - 1
 
     # Cleanup invalid / missing data rows
-    required_cols = DEFAULT_FEATURE_COLS + ['Target_方向', '多空线', 'BBI', '收盘', 'KDJ_J', 'MA120_slope']
+    required_cols = DEFAULT_FEATURE_COLS + ['多空线', 'BBI', '收盘', 'KDJ_J', 'MA120_slope']
     df.replace([np.inf, -np.inf], np.nan, inplace=True)
     df = df.dropna(subset=required_cols).reset_index(drop=True)
     return df
@@ -198,7 +198,7 @@ def walk_forward_predict(df: pd.DataFrame, config: StrategyConfig) -> Tuple[np.n
     train_window = config.train_window
     retrain_every = config.retrain_every
     X = df[DEFAULT_FEATURE_COLS].values
-    y = df['Target_方向'].values.astype(int)
+    y = df['Target_方向'].values
     n = len(df)
     predictions = np.full(n, -1, dtype=int)
     probabilities = np.full(n, 0.5)
@@ -206,16 +206,23 @@ def walk_forward_predict(df: pd.DataFrame, config: StrategyConfig) -> Tuple[np.n
     for train_end in range(train_window, n, retrain_every):
         test_end = min(train_end + retrain_every, n)
         # Prevent look-ahead bias: subtract future_return_days from training window
-        X_train = X[train_end - train_window : train_end - config.future_return_days]
-        y_train = y[train_end - train_window : train_end - config.future_return_days]
+        X_train_raw = X[train_end - train_window : train_end - config.future_return_days]
+        y_train_raw = y[train_end - train_window : train_end - config.future_return_days]
+        
+        # Only keep rows in training set where target is not NaN
+        valid_idx = ~np.isnan(y_train_raw)
+        X_train = X_train_raw[valid_idx]
+        y_train = y_train_raw[valid_idx].astype(int)
+        
         X_test = X[train_end:test_end]
 
-        if len(X_test) == 0:
+        if len(X_test) == 0 or len(X_train) == 0:
             continue
 
         rf = RandomForestClassifier(
             n_estimators=config.n_estimators, max_depth=config.max_depth,
             min_samples_leaf=config.min_samples_leaf, random_state=config.random_state,
+            class_weight='balanced',  # Added to address class imbalance
             n_jobs=-1
         )
         rf.fit(X_train, y_train)
@@ -392,8 +399,14 @@ def portfolio_backtest_2024(all_assets: Dict[str, Dict[str, Any]], config: Strat
                     continue
                 if asset['ma120_slope'][local_idx] <= 0:
                     continue
-                if asset['kdj_j'][local_idx] >= config.kdj_panic_threshold:
-                    continue
+                
+                # Relax KDJ_J panic oversold filter if trend is strong or model confidence is high
+                is_strong_trend = asset['ma120_slope'][local_idx] > 0.01
+                high_confidence = asset['y_prob'][local_idx] > 0.65
+                if not (is_strong_trend or high_confidence):
+                    if asset['kdj_j'][local_idx] >= config.kdj_panic_threshold:
+                        continue
+                
                 if asset['close'][local_idx] < asset['bb_line'][local_idx]:
                     continue
                 
