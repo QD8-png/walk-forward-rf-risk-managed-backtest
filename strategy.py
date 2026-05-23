@@ -193,8 +193,8 @@ def prepare_features(df: pd.DataFrame, config: StrategyConfig) -> pd.DataFrame:
 # ==============================================================================
 # 2. Walk-Forward Predictive Engine
 # ==============================================================================
-def walk_forward_predict(df: pd.DataFrame, config: StrategyConfig) -> Tuple[np.ndarray, np.ndarray, int]:
-    """Generates machine learning predictions using rolling walk-forward validation."""
+def walk_forward_predict(df: pd.DataFrame, config: StrategyConfig, model_type: str = 'rf') -> Tuple[np.ndarray, np.ndarray, int]:
+    """Generates machine learning predictions using rolling walk-forward validation with baseline model support."""
     train_window = config.train_window
     retrain_every = config.retrain_every
     X = df[DEFAULT_FEATURE_COLS].values
@@ -202,6 +202,10 @@ def walk_forward_predict(df: pd.DataFrame, config: StrategyConfig) -> Tuple[np.n
     n = len(df)
     predictions = np.full(n, -1, dtype=int)
     probabilities = np.full(n, 0.5)
+
+    from sklearn.preprocessing import StandardScaler
+    from sklearn.linear_model import LogisticRegression
+    import lightgbm as lgb
 
     for train_end in range(train_window, n, retrain_every):
         test_end = min(train_end + retrain_every, n)
@@ -219,16 +223,41 @@ def walk_forward_predict(df: pd.DataFrame, config: StrategyConfig) -> Tuple[np.n
         if len(X_test) == 0 or len(X_train) == 0:
             continue
 
-        rf = RandomForestClassifier(
-            n_estimators=config.n_estimators, max_depth=config.max_depth,
-            min_samples_leaf=config.min_samples_leaf, random_state=config.random_state,
-            class_weight='balanced',  # Added to address class imbalance
-            n_jobs=-1
-        )
-        rf.fit(X_train, y_train)
+        # Feature scaling for Logistic Regression
+        if model_type == 'lr':
+            scaler = StandardScaler()
+            X_train_scaled = scaler.fit_transform(X_train)
+            X_test_scaled = scaler.transform(X_test)
+        else:
+            X_train_scaled = X_train
+            X_test_scaled = X_test
 
-        preds = rf.predict(X_test)
-        probs = rf.predict_proba(X_test)
+        # Model instantiation
+        if model_type == 'rf':
+            model = RandomForestClassifier(
+                n_estimators=config.n_estimators, max_depth=config.max_depth,
+                min_samples_leaf=config.min_samples_leaf, random_state=config.random_state,
+                class_weight='balanced',
+                n_jobs=-1
+            )
+        elif model_type == 'lgbm':
+            model = lgb.LGBMClassifier(
+                n_estimators=config.n_estimators, max_depth=config.max_depth,
+                random_state=config.random_state, class_weight='balanced',
+                n_jobs=-1, verbosity=-1
+            )
+        elif model_type == 'lr':
+            model = LogisticRegression(
+                penalty='l2', C=1.0, random_state=config.random_state,
+                class_weight='balanced', max_iter=1000
+            )
+        else:
+            raise ValueError(f"Unknown model_type: {model_type}")
+
+        model.fit(X_train_scaled, y_train)
+
+        preds = model.predict(X_test_scaled)
+        probs = model.predict_proba(X_test_scaled)
         prob_col = probs[:, 1] if probs.shape[1] > 1 else np.full(len(X_test), 0.5)
 
         predictions[train_end:test_end] = preds
@@ -238,7 +267,7 @@ def walk_forward_predict(df: pd.DataFrame, config: StrategyConfig) -> Tuple[np.n
 
 
 # Parallelized feature generation and machine learning worker
-def process_single_asset(ticker: str, df: pd.DataFrame, config: StrategyConfig) -> Optional[Dict[str, Any]]:
+def process_single_asset(ticker: str, df: pd.DataFrame, config: StrategyConfig, model_type: str = 'rf') -> Optional[Dict[str, Any]]:
     """Helper method to run technical analysis and rolling training on single asset."""
     try:
         df = prepare_features(df, config)
@@ -251,7 +280,7 @@ def process_single_asset(ticker: str, df: pd.DataFrame, config: StrategyConfig) 
     if df['日期'].max() < pd.Timestamp('2024-01-01'):
         return None
 
-    predictions, probabilities, first_valid = walk_forward_predict(df, config)
+    predictions, probabilities, first_valid = walk_forward_predict(df, config, model_type=model_type)
     sliced = df.iloc[first_valid:].reset_index(drop=True)
     
     return {
@@ -623,12 +652,14 @@ def main() -> None:
         return
 
     # Multiprocessing accelerated Walk-Forward RF engineering
-    print("\n2. 启动多进程并发加速：特征工程建模与 Walk-Forward 滚动训练...")
+    # 可在此处修改 model_type 来选用不同的机器学习底座: 'rf' (随机森林), 'lgbm' (LightGBM), 'lr' (逻辑回归)
+    model_type = 'rf'
+    print(f"\n2. 启动多进程并发加速：特征工程建模与 Walk-Forward 滚动训练 (模型类型: {model_type.upper()})...")
     all_assets = {}
     max_workers = min(multiprocessing.cpu_count(), len(valid_dfs))
     
     with ProcessPoolExecutor(max_workers=max_workers) as executor:
-        futures = {executor.submit(process_single_asset, t, df, config): t for t, df in valid_dfs.items()}
+        futures = {executor.submit(process_single_asset, t, df, config, model_type): t for t, df in valid_dfs.items()}
         for i, future in enumerate(as_completed(futures), 1):
             res = future.result()
             if res:
