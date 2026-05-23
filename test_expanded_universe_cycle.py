@@ -35,7 +35,7 @@ config = strategy.StrategyConfig()
 config.portfolio_capital = 1_000_000.0
 config.n_shuffles = 20  # Reduced for fast validation on 5-year period
 
-def custom_portfolio_backtest(all_assets: Dict[str, Dict[str, Any]], config: strategy.StrategyConfig) -> Tuple[float, float, List[float], List[pd.Timestamp]]:
+def custom_portfolio_backtest(all_assets: Dict[str, Dict[str, Any]], config: strategy.StrategyConfig, non_compounding: bool = False) -> Tuple[float, float, List[float], List[pd.Timestamp]]:
     """
     Custom portfolio backtest running exactly from 2019-01-01 to 2023-12-31.
     Uses the exact same transaction cost, rotation, entry gate, and exits as strategy.py.
@@ -43,6 +43,7 @@ def custom_portfolio_backtest(all_assets: Dict[str, Dict[str, Any]], config: str
     capital = config.portfolio_capital
     holdings: Dict[str, strategy.Holding] = {}
     cooldowns: Dict[str, int] = {}
+    pocketed_profit = 0.0
     
     # Consolidate all timeline dates
     all_dates = set()
@@ -60,7 +61,8 @@ def custom_portfolio_backtest(all_assets: Dict[str, Dict[str, Any]], config: str
     start_date = pd.Timestamp('2019-01-01')
     end_date = pd.Timestamp('2023-12-31')
 
-    print("\n--- 启动 2019-2023 周期性滚动回测 ---")
+    mode_str = "【非复利/利润锁定模式】" if non_compounding else "【复利模式】"
+    print(f"\n--- 启动 2019-2023 周期性滚动回测 {mode_str} ---")
     print(f"回测区间: {start_date.strftime('%Y-%m-%d')} 至 {end_date.strftime('%Y-%m-%d')}")
     print(f"初始资产: CNY {capital:,.2f}")
     
@@ -206,10 +208,31 @@ def custom_portfolio_backtest(all_assets: Dict[str, Dict[str, Any]], config: str
                 position_weight=target_weight,
             )
         
-        portfolio_values.append(capital)
+        # Profit extraction logic for non-compounding mode at the end of the day
+        if non_compounding:
+            profit = capital - config.portfolio_capital
+            if profit > 0:
+                total_weight = sum(h.position_weight for h in holdings.values())
+                cash = capital * (1.0 - total_weight)
+                withdrawn = min(profit, cash)
+                if withdrawn > 0:
+                    capital_before = capital
+                    capital -= withdrawn
+                    pocketed_profit += withdrawn
+                    if len(holdings) > 0 and capital > 0:
+                        weight_scale = capital_before / capital
+                        for h in holdings.values():
+                            h.position_weight *= weight_scale
+        
+        equity_val = capital + pocketed_profit if non_compounding else capital
+        portfolio_values.append(equity_val)
         portfolio_dates.append(today)
 
-    total_return = capital / config.portfolio_capital - 1
+    actual_final_capital = capital
+    if non_compounding:
+        actual_final_capital = capital + pocketed_profit
+
+    total_return = actual_final_capital / config.portfolio_capital - 1
     ann_factor = 252
     n_days = len(portfolio_values)
     curve = pd.Series(portfolio_values)
@@ -224,10 +247,15 @@ def custom_portfolio_backtest(all_assets: Dict[str, Dict[str, Any]], config: str
         annualized_return, annualized_vol, sharpe, max_drawdown = 0, 0, 0, 0
 
     print("\n" + "=" * 50)
-    print("2019-2023 跨越牛熊周期 - 50只行业龙头海选轮动 - 绩效报告")
+    print(f"2019-2023 跨越牛熊周期 - 50只行业龙头海选轮动 - {mode_str} 绩效报告")
     print("=" * 50)
     print(f"  初始资金:     CNY {config.portfolio_capital:,.2f}")
-    print(f"  终末资金:     CNY {capital:,.2f}")
+    if non_compounding:
+        print(f"  交易池终末资金: CNY {capital:,.2f}")
+        print(f"  已提现锁定利润: CNY {pocketed_profit:,.2f}")
+        print(f"  投资者总权益:   CNY {actual_final_capital:,.2f}")
+    else:
+        print(f"  终末资金:     CNY {capital:,.2f}")
     print(f"  总收益率:     {total_return * 100:.2f}%")
     print(f"  年化收益:     {annualized_return * 100:.2f}%")
     print(f"  年化波动:     {annualized_vol * 100:.2f}%")
@@ -356,32 +384,99 @@ def main():
         print("   没有符合预测时间线标准的标的，回测结束。")
         return
 
-    # 3. Custom portfolio rotation backtest
-    actual_return, max_drawdown, values, dates = custom_portfolio_backtest(all_assets, config)
+    # 3. Custom portfolio rotation backtest (Double-mode)
+    print("\n3.1. 启动【复利模式】回测...")
+    actual_return, max_drawdown, values, dates = custom_portfolio_backtest(all_assets, config, non_compounding=False)
     
-    # 4. Premium graph saving
-    plot_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "plots", "cycle_portfolio_equity.png")
-    strategy.plot_portfolio_equity(dates, values, len(all_assets), save_path=plot_path)
+    print("\n3.2. 启动【非复利/利润锁定模式】回测...")
+    nc_return, nc_max_drawdown, nc_values, nc_dates = custom_portfolio_backtest(all_assets, config, non_compounding=True)
+    
+    # 4. Premium comparison graph saving
+    plot_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "plots", "cycle_portfolio_equity_comparison.png")
+    
+    # Custom comparison plot helper
+    def plot_portfolio_equity_comparison(dates: List[pd.Timestamp], values_comp: List[float], values_nc: List[float], asset_count: int, save_path: str = None):
+        """Draws premium TradingView-themed portfolio equity comparison curves."""
+        fig, ax = plt.subplots(figsize=(12, 6.5), facecolor='#0D1117')
+        ax.set_facecolor('#0D1117')
+        
+        dates_clean = pd.to_datetime(dates)
+        norm_comp = np.array(values_comp) / values_comp[0]
+        norm_nc = np.array(values_nc) / values_nc[0]
+        
+        ax.plot(dates_clean, norm_comp, color='#00F2FE', linewidth=2.5, label='复利增长模式 (Compounding)', alpha=0.9)
+        ax.plot(dates_clean, norm_nc, color='#FF5E62', linewidth=2.5, label='非复利/锁定利润模式 (Non-compounding)', alpha=0.9)
+        
+        ax.axhline(y=1.0, color='#8B949E', linestyle='--', linewidth=0.8, alpha=0.6)
+        
+        ax.set_title(f'双模式投资组合净值对比曲线 (2019-2023 牛熊周期 - 共 {asset_count} 只有效股票)', fontsize=14, color='#F0F6FC', pad=20, weight='bold')
+        ax.set_ylabel('组合净值 (初始=1.00)', color='#F0F6FC', fontsize=11, labelpad=10)
+        ax.set_xlabel('回测日期', color='#F0F6FC', fontsize=11, labelpad=10)
+        ax.tick_params(colors='#8B949E', labelsize=9.5)
+        ax.grid(True, which='both', color='#21262D', linestyle='-', linewidth=0.7, alpha=0.6)
+        
+        info_text = (
+            f"复利终末净值:   {norm_comp[-1]:.3f} ({(norm_comp[-1] - 1)*100:+.2f}%)\n"
+            f"非复利终末净值: {norm_nc[-1]:.3f} ({(norm_nc[-1] - 1)*100:+.2f}%)"
+        )
+        ax.text(0.03, 0.82, info_text, transform=ax.transAxes, fontsize=10, color='#F0F6FC',
+                 bbox=dict(boxstyle='round,pad=0.8', facecolor='#161B22', edgecolor='#30363D', alpha=0.9))
+        
+        leg = ax.legend(loc='upper left', bbox_to_anchor=(0.03, 0.70), facecolor='#161B22', edgecolor='#30363D', fontsize=10)
+        for text in leg.get_texts():
+            text.set_color('#F0F6FC')
+            
+        plt.tight_layout()
+        if save_path:
+            os.makedirs(os.path.dirname(os.path.abspath(save_path)), exist_ok=True)
+            plt.savefig(save_path, facecolor='#0D1117', edgecolor='none', dpi=150)
+            print(f"  [SAVE] 组合回测对比图表已保存: {save_path}")
+        plt.show()
+
+    plot_portfolio_equity_comparison(dates, values, nc_values, len(all_assets), save_path=plot_path)
 
     # Save summary indicators to CSV for reference
     ann_factor = 252
-    n_days = len(values)
-    curve = pd.Series(values)
-    daily_returns = curve.pct_change().dropna()
-    annualized_return = (1 + actual_return) ** (ann_factor / n_days) - 1 if n_days > 0 else 0
-    annualized_vol = daily_returns.std() * np.sqrt(ann_factor) if len(daily_returns) > 0 else 0
-    sharpe = (annualized_return - config.risk_free_rate) / annualized_vol if annualized_vol != 0 else 0
     
-    summary_df = pd.DataFrame([{
-        "Universe_Size": len(all_assets),
-        "Start_Date": "2019-01-01",
-        "End_Date": "2023-12-31",
-        "Total_Return": f"{actual_return * 100:.2f}%",
-        "Annualized_Return": f"{annualized_return * 100:.2f}%",
-        "Annualized_Vol": f"{annualized_vol * 100:.2f}%",
-        "Sharpe_Ratio": f"{sharpe:.4f}",
-        "Max_Drawdown": f"{max_drawdown * 100:.2f}%"
-    }])
+    # Calculate Compounding stats
+    n_days = len(values)
+    curve_comp = pd.Series(values)
+    daily_comp = curve_comp.pct_change().dropna()
+    ann_ret_comp = (1 + actual_return) ** (ann_factor / n_days) - 1 if n_days > 0 else 0
+    ann_vol_comp = daily_comp.std() * np.sqrt(ann_factor) if len(daily_comp) > 0 else 0
+    sharpe_comp = (ann_ret_comp - config.risk_free_rate) / ann_vol_comp if ann_vol_comp != 0 else 0
+    
+    # Calculate Non-compounding stats
+    curve_nc = pd.Series(nc_values)
+    daily_nc = curve_nc.pct_change().dropna()
+    ann_ret_nc = (1 + nc_return) ** (ann_factor / n_days) - 1 if n_days > 0 else 0
+    ann_vol_nc = daily_nc.std() * np.sqrt(ann_factor) if len(daily_nc) > 0 else 0
+    sharpe_nc = (ann_ret_nc - config.risk_free_rate) / ann_vol_nc if ann_vol_nc != 0 else 0
+    
+    summary_df = pd.DataFrame([
+        {
+            "Mode": "Compounding (复利)",
+            "Universe_Size": len(all_assets),
+            "Start_Date": "2019-01-01",
+            "End_Date": "2023-12-31",
+            "Total_Return": f"{actual_return * 100:.2f}%",
+            "Annualized_Return": f"{ann_ret_comp * 100:.2f}%",
+            "Annualized_Vol": f"{ann_vol_comp * 100:.2f}%",
+            "Sharpe_Ratio": f"{sharpe_comp:.4f}",
+            "Max_Drawdown": f"{max_drawdown * 100:.2f}%"
+        },
+        {
+            "Mode": "Non-compounding (非复利/锁定利润)",
+            "Universe_Size": len(all_assets),
+            "Start_Date": "2019-01-01",
+            "End_Date": "2023-12-31",
+            "Total_Return": f"{nc_return * 100:.2f}%",
+            "Annualized_Return": f"{ann_ret_nc * 100:.2f}%",
+            "Annualized_Vol": f"{ann_vol_nc * 100:.2f}%",
+            "Sharpe_Ratio": f"{sharpe_nc:.4f}",
+            "Max_Drawdown": f"{nc_max_drawdown * 100:.2f}%"
+        }
+    ])
     summary_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "cycle_results_summary.csv")
     summary_df.to_csv(summary_path, index=False, encoding='utf-8-sig')
     print(f"  [SAVE] 周期回测指标数据已保存: {summary_path}")
