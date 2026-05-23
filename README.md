@@ -137,6 +137,14 @@ X_test  = X[train_end : test_end]
 
 ---
 
+## 📈 回测业绩与资金净值曲线 (Empirical Performance)
+
+本系统在回测结束后会自动输出具有高级暗黑金融美学的组合资金净值曲线（图像输出保存在 `plots/v4_portfolio_equity.png` 路径中）：
+
+![多资产轮动组合资金净值曲线](plots/v4_portfolio_equity.png)
+
+---
+
 ## 项目文件结构
 
 ```
