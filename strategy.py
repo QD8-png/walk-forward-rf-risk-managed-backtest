@@ -326,6 +326,7 @@ def portfolio_backtest_2024(all_assets: Dict[str, Dict[str, Any]], config: Strat
     capital = config.portfolio_capital
     holdings: Dict[str, Holding] = {}
     cooldowns: Dict[str, int] = {}
+    trade_counts: Dict[str, int] = {}  # Force broader rotation: max 3 trades per stock
     
     # Consolidate all timeline dates
     all_dates = set()
@@ -426,6 +427,8 @@ def portfolio_backtest_2024(all_assets: Dict[str, Dict[str, Any]], config: Strat
                     continue
                 if stock_name in cooldowns and day_idx < cooldowns[stock_name]:
                     continue
+                if trade_counts.get(stock_name, 0) >= 3:
+                    continue
                 
                 idx_map = asset_date_map[stock_name]
                 if today not in idx_map:
@@ -475,6 +478,7 @@ def portfolio_backtest_2024(all_assets: Dict[str, Dict[str, Any]], config: Strat
             
             capital *= (1 - config.fee_rate * target_weight)
             total_trades += 1
+            trade_counts[stock_name] = trade_counts.get(stock_name, 0) + 1
             holdings[stock_name] = Holding(
                 name=stock_name,
                 entry_price=asset['close'][local_idx],

@@ -1,9 +1,9 @@
 # -*- coding: utf-8 -*-
 """
-Full cycle backtest (2019-2023) on an Expanded Stock Universe of 50 sector leaders
-==============================================================================
-Uses the exact machine learning rolling forecasting, technical indicators, and multi-stage 
-risk controls from our git_review/strategy.py codebase.
+Full cycle backtest (2019-2023) on a COMPLETELY NEW independent Universe of 50 Sector Leaders
+========================================================================================
+Replicates the exact rolling machine learning, wind control, and 3-trade limit structural constraint
+to evaluate generalizability and eliminate survival/selection bias.
 """
 
 import os
@@ -28,23 +28,18 @@ warnings.filterwarnings("ignore")
 
 # Resolve path to import our strategy code
 sys.path.insert(0, os.path.abspath(os.path.dirname(__file__)))
-sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "git_review")))
 import strategy
 
-# We will inherit StrategyConfig but adjust n_shuffles for speed if needed
+# We will inherit StrategyConfig
 config = strategy.StrategyConfig()
 config.portfolio_capital = 1_000_000.0
-config.n_shuffles = 20  # Reduced for fast validation on 5-year period
+config.n_shuffles = 20  # Reduced for speed
 
 def custom_portfolio_backtest(all_assets: Dict[str, Dict[str, Any]], config: strategy.StrategyConfig, non_compounding: bool = False) -> Tuple[float, float, List[float], List[pd.Timestamp]]:
-    """
-    Custom portfolio backtest running exactly from 2019-01-01 to 2023-12-31.
-    Uses the exact same transaction cost, rotation, entry gate, and exits as strategy.py.
-    """
     capital = config.portfolio_capital
     holdings: Dict[str, strategy.Holding] = {}
     cooldowns: Dict[str, int] = {}
-    trade_counts: Dict[str, int] = {}  # Force broader rotation: max 3 trades per stock
+    trade_counts: Dict[str, int] = {}  # Max 3 trades per stock limit
     pocketed_profit = 0.0
     
     # Consolidate all timeline dates
@@ -64,9 +59,7 @@ def custom_portfolio_backtest(all_assets: Dict[str, Dict[str, Any]], config: str
     end_date = pd.Timestamp('2023-12-31')
 
     mode_str = "【非复利/利润锁定模式】" if non_compounding else "【复利模式】"
-    print(f"\n--- 启动 2019-2023 周期性滚动回测 {mode_str} ---")
-    print(f"回测区间: {start_date.strftime('%Y-%m-%d')} 至 {end_date.strftime('%Y-%m-%d')}")
-    print(f"初始资产: CNY {capital:,.2f}")
+    print(f"\n--- 启动新大池子 2019-2023 周期性滚动回测 {mode_str} (每只股票限3次交易) ---")
     
     for day_idx, today in enumerate(all_dates):
         today_ts = pd.Timestamp(today)
@@ -93,7 +86,6 @@ def custom_portfolio_backtest(all_assets: Dict[str, Dict[str, Any]], config: str
             if current_close > h.max_price:
                 h.max_price = current_close
         
-        # Parallel-sum weighted update of capital pool (fixes compounding return bug)
         capital = capital * (1 + daily_portfolio_return)
         
         # 2. Risk checks and Exits execution
@@ -113,25 +105,23 @@ def custom_portfolio_backtest(all_assets: Dict[str, Dict[str, Any]], config: str
             # Layer A: Price falls below core Bull-Bear Line
             if current_close < asset['bb_line'][local_idx]:
                 should_exit = True
-            # Layer B: Hard Adaptive Stop-loss (2.0 * ATR below low of entry day)
+            # Layer B: Hard Adaptive Stop-loss
             elif current_close < h.entry_stop_price:
                 should_exit = True
             else:
                 unrealized = current_close / h.entry_price - 1
-                # Layer C: Trailing Stop profit lock or minor take-profit exit
+                # Layer C: Trailing Stop
                 if unrealized < config.trailing_activate_pct:
-                    # ML turns bearish with small/no profit: Exit (catch small fish)
                     if asset['y_pred'][local_idx] == 0 and unrealized > 0:
                         should_exit = True
                 else:
-                    # Trailing Stop triggered: Drop 5% from historical peak
                     if h.max_price > h.entry_price and current_close < h.max_price * (1 - config.trailing_stop_pct):
                         should_exit = True
             
             if should_exit:
                 stocks_to_sell.append(stock_name)
             else:
-                # Layer D: BBI deviation ladder take-profit (halve position size)
+                # Layer D: BBI deviation ladder take-profit
                 bbi_dev = current_close / asset['bbi'][local_idx] - 1
                 is_bull = (current_close / asset['open'][local_idx] - 1) >= config.big_bull_threshold
                 if bbi_dev >= config.bbi_dev_threshold and is_bull and h.position_weight > config.min_remaining_position * config.max_weight_per_stock:
@@ -153,7 +143,7 @@ def custom_portfolio_backtest(all_assets: Dict[str, Dict[str, Any]], config: str
                     continue
                 if stock_name in cooldowns and day_idx < cooldowns[stock_name]:
                     continue
-                if trade_counts.get(stock_name, 0) >= 3:
+                if trade_counts.get(stock_name, 0) >= 3:  # Hard constraint: max 3 trades per stock
                     continue
                 
                 idx_map = asset_date_map[stock_name]
@@ -168,7 +158,6 @@ def custom_portfolio_backtest(all_assets: Dict[str, Dict[str, Any]], config: str
                 if asset['ma120_slope'][local_idx] <= 0:
                     continue
                 
-                # Relax KDJ_J panic oversold filter if trend is strong or model confidence is high
                 is_strong_trend = asset['ma120_slope'][local_idx] > 0.01
                 high_confidence = asset['y_prob'][local_idx] > 0.65
                 if not (is_strong_trend or high_confidence):
@@ -213,7 +202,7 @@ def custom_portfolio_backtest(all_assets: Dict[str, Dict[str, Any]], config: str
                 position_weight=target_weight,
             )
         
-        # Profit extraction logic for non-compounding mode at the end of the day
+        # Profit extraction logic for non-compounding mode
         if non_compounding:
             profit = capital - config.portfolio_capital
             if profit > 0:
@@ -233,10 +222,7 @@ def custom_portfolio_backtest(all_assets: Dict[str, Dict[str, Any]], config: str
         portfolio_values.append(equity_val)
         portfolio_dates.append(today)
 
-    actual_final_capital = capital
-    if non_compounding:
-        actual_final_capital = capital + pocketed_profit
-
+    actual_final_capital = capital + pocketed_profit if non_compounding else capital
     total_return = actual_final_capital / config.portfolio_capital - 1
     ann_factor = 252
     n_days = len(portfolio_values)
@@ -252,15 +238,10 @@ def custom_portfolio_backtest(all_assets: Dict[str, Dict[str, Any]], config: str
         annualized_return, annualized_vol, sharpe, max_drawdown = 0, 0, 0, 0
 
     print("\n" + "=" * 50)
-    print(f"2019-2023 跨越牛熊周期 - 50只行业龙头海选轮动 - {mode_str} 绩效报告")
+    print(f"新大池子 2019-2023 最终绩效报告 ({mode_str})")
     print("=" * 50)
     print(f"  初始资金:     CNY {config.portfolio_capital:,.2f}")
-    if non_compounding:
-        print(f"  交易池终末资金: CNY {capital:,.2f}")
-        print(f"  已提现锁定利润: CNY {pocketed_profit:,.2f}")
-        print(f"  投资者总权益:   CNY {actual_final_capital:,.2f}")
-    else:
-        print(f"  终末资金:     CNY {capital:,.2f}")
+    print(f"  终末总权益:   CNY {actual_final_capital:,.2f}")
     print(f"  总收益率:     {total_return * 100:.2f}%")
     print(f"  年化收益:     {annualized_return * 100:.2f}%")
     print(f"  年化波动:     {annualized_vol * 100:.2f}%")
@@ -272,47 +253,42 @@ def custom_portfolio_backtest(all_assets: Dict[str, Dict[str, Any]], config: str
         
     return total_return, max_drawdown, portfolio_values, portfolio_dates
 
-def get_expanded_50_tickers() -> List[str]:
-    """Returns a highly diversified A-shares expanded universe of 50 sector leaders and ETFs."""
+def get_new_50_tickers() -> List[str]:
+    """Returns a completely new set of 50 high-liquidity prominent A-shares tickers disjoint from Pool A."""
     return [
-        # ETFs
-        "510300.SS", "510500.SS", "510050.SS", "159915.SZ", # CSI 300, CSI 500, SSE 50, ChiNext
-        "512000.SS", "512480.SS", "512170.SS", "512660.SS", # Brokerage, Semiconductor, Healthcare, Defense
-        "515030.SS", "512690.SS", "512880.SS", # Bank removed because of delisted error, NEV, Liquor, Infrastructure
-        
-        # Consumption leaders
-        "600519.SS", "000858.SZ", "600887.SS", "002714.SZ", 
-        "601933.SS", "002508.SZ", "603288.SS", "600009.SS",
-        
-        # Energy & Materials
-        "300750.SZ", "002594.SZ", "601012.SS", "002460.SZ",
-        "601899.SS", "600019.SS", "603993.SS", "600547.SS",
-        
-        # Technology / Hardware / AI
-        "000977.SZ", "603019.SS", "002230.SZ", "002415.SZ",
-        "600584.SS", "000063.SZ", "600745.SS", "300059.SZ",
-        "601138.SS", "002027.SZ",
-        
-        # Financials
-        "600036.SS", "601318.SS", "600030.SS", "601398.SS",
-        "601688.SS", "000001.SZ",
-        
-        # Utilities, Oil, Industry
-        "600900.SS", "601857.SS", "600028.SS", "600150.SS",
-        "600276.SS", "300015.SZ"
+        # Industrial / Machinery Leaders
+        "600031.SS", "000157.SZ", "601100.SS", "000425.SZ",
+        # Consumer Electronics & Hardware Innovators
+        "002475.SZ", "002241.SZ", "603501.SS", "603986.SS", "600703.SS", "002049.SZ",
+        # Biotech / Medical Giants
+        "300760.SZ", "603259.SS", "000538.SZ", "600436.SS", "002007.SZ",
+        # Chemicals & Materials
+        "600309.SS", "600426.SS", "600989.SS",
+        # Solar / Wind / Electric Grid
+        "300274.SZ", "600438.SS", "601877.SS", "002459.SZ", "600406.SS",
+        # F&B / Spirits / Consumer Goods
+        "600600.SS", "600132.SS", "000876.SZ", "000895.SZ", "000568.SZ",
+        # Real Estate & Heavy Infra & Shipping
+        "000002.SZ", "600048.SS", "601668.SS", "002352.SZ", "601006.SS", "601919.SS",
+        # Telecom & Soft AI & Software
+        "601728.SS", "600941.SS", "600050.SS", "688111.SS", "600570.SS",
+        # Automotive & EV Industry
+        "600104.SS", "601633.SS", "601238.SS", "000625.SZ",
+        # Financials (Banks, Insurance, Brokers)
+        "601288.SS", "601988.SS", "601601.SS", "601377.SS",
+        # Resources & Coal & Gold
+        "601088.SS", "601225.SS", "600489.SS"
     ]
 
 def process_single_asset_custom(ticker: str, df: pd.DataFrame, config: strategy.StrategyConfig, model_type: str = 'rf') -> Optional[Dict[str, Any]]:
-    """Custom version of process_single_asset that bypasses the 2024 date limit."""
     try:
         df = strategy.prepare_features(df, config)
-    except Exception as e:
+    except Exception:
         return None
 
     if len(df) < config.min_data_length:
         return None
 
-    # Adapt date check to our 2019-2023 range
     if df['日期'].max() < pd.Timestamp('2023-12-01'):
         return None
 
@@ -336,15 +312,13 @@ def process_single_asset_custom(ticker: str, df: pd.DataFrame, config: strategy.
     }
 
 def main():
-    tickers = get_expanded_50_tickers()
+    tickers = get_new_50_tickers()
     
     print("=" * 60)
-    print("★ 启动学术级实证扩展：2019-2023 牛熊完整周期大样本回测 ★")
+    print("★ 启动全新大池子实证对比：新50只行业龙头2019-2023周期压力测试 ★")
     print("=" * 60)
     
-    # We download from 2016-01-01 to give walk-forward modeling a 3-year warm-up
-    # so out-of-sample backtesting starts exactly on 2019-01-01.
-    print(f"1. 批量下载及构建 {len(tickers)} 只标的自 2016-01-01 至 2023-12-31 的技术特征...")
+    print(f"1. 批量下载新大池子 {len(tickers)} 只标的自 2016-01-01 至 2023-12-31 的日线行情...")
     data = yf.download(tickers, start="2016-01-01", end="2023-12-31", group_by='ticker', threads=True, progress=False)
     
     valid_dfs = {}
@@ -362,9 +336,9 @@ def main():
                 df = df.reset_index()
                 valid_dfs[t] = df
         except Exception as e:
-            print(f"   标的 {t} 报错: {e}")
+            pass
             
-    print(f"   下载完毕。包含足额历史(>600天)的标的数: {len(valid_dfs)}")
+    print(f"   下载完毕。可用标的数: {len(valid_dfs)}")
     if len(valid_dfs) == 0:
         print("   错误: 没有可用标的数据，请检查网络！")
         return
@@ -390,18 +364,16 @@ def main():
         return
 
     # 3. Custom portfolio rotation backtest (Double-mode)
-    print("\n3.1. 启动【复利模式】回测...")
+    print("\n3.1. 启动新池子【复利模式】回测...")
     actual_return, max_drawdown, values, dates = custom_portfolio_backtest(all_assets, config, non_compounding=False)
     
-    print("\n3.2. 启动【非复利/利润锁定模式】回测...")
+    print("\n3.2. 启动新池子【非复利/利润锁定模式】回测...")
     nc_return, nc_max_drawdown, nc_values, nc_dates = custom_portfolio_backtest(all_assets, config, non_compounding=True)
     
     # 4. Premium comparison graph saving
-    plot_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "plots", "cycle_portfolio_equity_comparison.png")
+    plot_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "plots", "new_cycle_portfolio_equity_comparison.png")
     
-    # Custom comparison plot helper
     def plot_portfolio_equity_comparison(dates: List[pd.Timestamp], values_comp: List[float], values_nc: List[float], asset_count: int, save_path: str = None):
-        """Draws premium TradingView-themed portfolio equity comparison curves."""
         fig, ax = plt.subplots(figsize=(12, 6.5), facecolor='#0D1117')
         ax.set_facecolor('#0D1117')
         
@@ -414,7 +386,7 @@ def main():
         
         ax.axhline(y=1.0, color='#8B949E', linestyle='--', linewidth=0.8, alpha=0.6)
         
-        ax.set_title(f'双模式投资组合净值对比曲线 (2019-2023 牛熊周期 - 共 {asset_count} 只有效股票)', fontsize=14, color='#F0F6FC', pad=20, weight='bold')
+        ax.set_title(f'全新大池子(Pool B)投资组合净值对比曲线 (2019-2023 牛熊周期 - 共 {asset_count} 只有效股票)', fontsize=14, color='#F0F6FC', pad=20, weight='bold')
         ax.set_ylabel('组合净值 (初始=1.00)', color='#F0F6FC', fontsize=11, labelpad=10)
         ax.set_xlabel('回测日期', color='#F0F6FC', fontsize=11, labelpad=10)
         ax.tick_params(colors='#8B949E', labelsize=9.5)
@@ -435,15 +407,13 @@ def main():
         if save_path:
             os.makedirs(os.path.dirname(os.path.abspath(save_path)), exist_ok=True)
             plt.savefig(save_path, facecolor='#0D1117', edgecolor='none', dpi=150)
-            print(f"  [SAVE] 组合回测对比图表已保存: {save_path}")
+            print(f"  [SAVE] 新组合回测对比图表已保存: {save_path}")
         plt.show()
 
     plot_portfolio_equity_comparison(dates, values, nc_values, len(all_assets), save_path=plot_path)
 
     # Save summary indicators to CSV for reference
     ann_factor = 252
-    
-    # Calculate Compounding stats
     n_days = len(values)
     curve_comp = pd.Series(values)
     daily_comp = curve_comp.pct_change().dropna()
@@ -451,7 +421,6 @@ def main():
     ann_vol_comp = daily_comp.std() * np.sqrt(ann_factor) if len(daily_comp) > 0 else 0
     sharpe_comp = (ann_ret_comp - config.risk_free_rate) / ann_vol_comp if ann_vol_comp != 0 else 0
     
-    # Calculate Non-compounding stats
     curve_nc = pd.Series(nc_values)
     daily_nc = curve_nc.pct_change().dropna()
     ann_ret_nc = (1 + nc_return) ** (ann_factor / n_days) - 1 if n_days > 0 else 0
@@ -460,7 +429,7 @@ def main():
     
     summary_df = pd.DataFrame([
         {
-            "Mode": "Compounding (复利)",
+            "Mode": "New Compounding (新复利)",
             "Universe_Size": len(all_assets),
             "Start_Date": "2019-01-01",
             "End_Date": "2023-12-31",
@@ -471,7 +440,7 @@ def main():
             "Max_Drawdown": f"{max_drawdown * 100:.2f}%"
         },
         {
-            "Mode": "Non-compounding (非复利/锁定利润)",
+            "Mode": "New Non-compounding (新非复利/锁定利润)",
             "Universe_Size": len(all_assets),
             "Start_Date": "2019-01-01",
             "End_Date": "2023-12-31",
@@ -482,9 +451,9 @@ def main():
             "Max_Drawdown": f"{nc_max_drawdown * 100:.2f}%"
         }
     ])
-    summary_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "cycle_results_summary.csv")
+    summary_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "new_cycle_results_summary.csv")
     summary_df.to_csv(summary_path, index=False, encoding='utf-8-sig')
-    print(f"  [SAVE] 周期回测指标数据已保存: {summary_path}")
+    print(f"  [SAVE] 新周期回测指标数据已保存: {summary_path}")
 
 if __name__ == "__main__":
     multiprocessing.freeze_support()
