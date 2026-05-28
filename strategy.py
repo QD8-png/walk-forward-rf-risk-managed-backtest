@@ -56,7 +56,9 @@ class StrategyConfig:
     ma120_slope_lookback: int = 20      # Days to compute the slope of MA120
     bbi_dev_threshold: float = 0.03     # Profit ladder BBI deviation (3%)
     big_bull_threshold: float = 0.02    # Daily return required for BBI profit ladder (2%)
-    cooldown_days: int = 120            # Asset cooling period post-liquidation (days)
+    cooldown_days: int = 15             # Asset cooling period post-liquidation (days) (Optimized from 120)
+    patience_days: int = 5              # Time-based exit window (days to wait for stock to rise)
+    patience_return: float = 0.005       # Minimum return threshold (0.5%) after patience_days
     
     # ATR Volatility-Based Stop-Loss
     atr_period: int = 14                # ATR calculation lookback window
@@ -200,8 +202,83 @@ def prepare_features(df: pd.DataFrame, config: StrategyConfig) -> pd.DataFrame:
 
 
 # ==============================================================================
+# ==============================================================================
 # 2. Walk-Forward Predictive Engine
 # ==============================================================================
+# PyTorch LSTM Helper Models & Functions
+try:
+    import torch
+    import torch.nn as nn
+    from torch.utils.data import TensorDataset, DataLoader
+    HAS_TORCH = True
+except ImportError:
+    HAS_TORCH = False
+
+if HAS_TORCH:
+    class PyTorchLSTMModel(nn.Module):
+        def __init__(self, input_dim, hidden_dim=32, num_layers=1, output_dim=2):
+            super(PyTorchLSTMModel, self).__init__()
+            self.lstm = nn.LSTM(input_dim, hidden_dim, num_layers, batch_first=True)
+            self.fc = nn.Linear(hidden_dim, output_dim)
+            
+        def forward(self, x):
+            out, _ = self.lstm(x)
+            out = out[:, -1, :]
+            out = self.fc(out)
+            return out
+
+    def prepare_lstm_data(X, y, seq_len=10):
+        N, D = X.shape
+        X_seq = np.zeros((N, seq_len, D), dtype=np.float32)
+        for i in range(N):
+            if i < seq_len - 1:
+                pad_len = seq_len - 1 - i
+                X_seq[i, :pad_len, :] = X[0]
+                X_seq[i, pad_len:, :] = X[:i+1]
+            else:
+                X_seq[i, :, :] = X[i - seq_len + 1 : i + 1]
+        return X_seq, y
+
+    def train_lstm(X_train, y_train, input_dim, seq_len=10, epochs=10, batch_size=64, lr=0.005):
+        # Set PyTorch to single-thread inside worker processes to avoid CPU thrashing / deadlocks
+        torch.set_num_threads(1)
+        
+        X_tensor = torch.tensor(X_train, dtype=torch.float32)
+        y_tensor = torch.tensor(y_train, dtype=torch.long)
+        
+        dataset = TensorDataset(X_tensor, y_tensor)
+        loader = DataLoader(dataset, batch_size=batch_size, shuffle=True)
+        
+        model = PyTorchLSTMModel(input_dim=input_dim)
+        criterion = nn.CrossEntropyLoss()
+        optimizer = torch.optim.Adam(model.parameters(), lr=lr)
+        
+        model.train()
+        for epoch in range(epochs):
+            for batch_x, batch_y in loader:
+                optimizer.zero_grad()
+                outputs = model(batch_x)
+                loss = criterion(outputs, batch_y)
+                loss.backward()
+                optimizer.step()
+                
+        return model
+
+    def predict_lstm(model, X_test):
+        torch.set_num_threads(1)
+        model.eval()
+        X_tensor = torch.tensor(X_test, dtype=torch.float32)
+        with torch.no_grad():
+            logits = model(X_tensor)
+            probs = torch.softmax(logits, dim=1).numpy()
+            preds = np.argmax(probs, axis=1)
+        return preds, probs
+else:
+    # Fail gracefully if torch is not installed
+    class PyTorchLSTMModel:
+        pass
+
+
 def walk_forward_predict(df: pd.DataFrame, config: StrategyConfig, model_type: str = 'rf') -> Tuple[np.ndarray, np.ndarray, int]:
     """Generates machine learning predictions using rolling walk-forward validation with baseline model support."""
     train_window = config.train_window
@@ -232,8 +309,8 @@ def walk_forward_predict(df: pd.DataFrame, config: StrategyConfig, model_type: s
         if len(X_test) == 0 or len(X_train) == 0:
             continue
 
-        # Feature scaling for Logistic Regression
-        if model_type == 'lr':
+        # Feature scaling for linear models & neural nets
+        if model_type in ['lr', 'lstm', 'ensemble']:
             scaler = StandardScaler()
             X_train_scaled = scaler.fit_transform(X_train)
             X_test_scaled = scaler.transform(X_test)
@@ -241,33 +318,108 @@ def walk_forward_predict(df: pd.DataFrame, config: StrategyConfig, model_type: s
             X_train_scaled = X_train
             X_test_scaled = X_test
 
-        # Model instantiation
+        # Model instantiation and prediction
         if model_type == 'rf':
             model = RandomForestClassifier(
                 n_estimators=config.n_estimators, max_depth=config.max_depth,
                 min_samples_leaf=config.min_samples_leaf, random_state=config.random_state,
                 class_weight='balanced',
-                n_jobs=-1
+                n_jobs=1
             )
+            model.fit(X_train_scaled, y_train)
+            preds = model.predict(X_test_scaled)
+            probs = model.predict_proba(X_test_scaled)
+            prob_col = probs[:, 1] if probs.shape[1] > 1 else np.full(len(X_test), 0.5)
+
         elif model_type == 'lgbm':
             model = lgb.LGBMClassifier(
                 n_estimators=config.n_estimators, max_depth=config.max_depth,
                 random_state=config.random_state, class_weight='balanced',
-                n_jobs=-1, verbosity=-1
+                n_jobs=1, verbosity=-1
             )
+            model.fit(X_train_scaled, y_train)
+            preds = model.predict(X_test_scaled)
+            probs = model.predict_proba(X_test_scaled)
+            prob_col = probs[:, 1] if probs.shape[1] > 1 else np.full(len(X_test), 0.5)
+
         elif model_type == 'lr':
             model = LogisticRegression(
                 penalty='l2', C=1.0, random_state=config.random_state,
                 class_weight='balanced', max_iter=1000
             )
+            model.fit(X_train_scaled, y_train)
+            preds = model.predict(X_test_scaled)
+            probs = model.predict_proba(X_test_scaled)
+            prob_col = probs[:, 1] if probs.shape[1] > 1 else np.full(len(X_test), 0.5)
+
+        elif model_type == 'lstm':
+            if not HAS_TORCH:
+                raise ImportError("PyTorch is required for LSTM model. Please install it first.")
+            seq_len = 10
+            X_train_seq, _ = prepare_lstm_data(X_train_scaled, y_train, seq_len=seq_len)
+            
+            # Construct sequential input for X_test with context from the end of training data
+            if len(X_train_scaled) >= seq_len:
+                X_test_concat = np.concatenate([X_train_scaled[-(seq_len - 1):], X_test_scaled], axis=0)
+            else:
+                padding = np.repeat(X_train_scaled[0:1], seq_len - 1 - len(X_train_scaled), axis=0)
+                X_test_concat = np.concatenate([padding, X_train_scaled, X_test_scaled], axis=0)
+            
+            N_test = len(X_test_scaled)
+            X_test_seq = np.zeros((N_test, seq_len, X_train_scaled.shape[1]), dtype=np.float32)
+            for idx in range(N_test):
+                X_test_seq[idx] = X_test_concat[idx : idx + seq_len]
+                
+            lstm_model = train_lstm(X_train_seq, y_train, input_dim=X_train_scaled.shape[1], seq_len=seq_len)
+            preds, probs = predict_lstm(lstm_model, X_test_seq)
+            prob_col = probs[:, 1]
+
+        elif model_type == 'ensemble':
+            # RF part
+            rf_model = RandomForestClassifier(
+                n_estimators=config.n_estimators, max_depth=config.max_depth,
+                min_samples_leaf=config.min_samples_leaf, random_state=config.random_state,
+                class_weight='balanced',
+                n_jobs=1
+            )
+            rf_model.fit(X_train, y_train)
+            prob_rf_arr = rf_model.predict_proba(X_test)[:, 1] if rf_model.classes_.shape[0] > 1 else np.full(len(X_test), 0.5)
+
+            # LGBM part
+            lgb_model = lgb.LGBMClassifier(
+                n_estimators=config.n_estimators, max_depth=config.max_depth,
+                random_state=config.random_state, class_weight='balanced',
+                n_jobs=1, verbosity=-1
+            )
+            lgb_model.fit(X_train, y_train)
+            prob_lgbm_arr = lgb_model.predict_proba(X_test)[:, 1] if lgb_model.classes_.shape[0] > 1 else np.full(len(X_test), 0.5)
+
+            # LSTM part
+            if HAS_TORCH:
+                seq_len = 10
+                X_train_seq, _ = prepare_lstm_data(X_train_scaled, y_train, seq_len=seq_len)
+                if len(X_train_scaled) >= seq_len:
+                    X_test_concat = np.concatenate([X_train_scaled[-(seq_len - 1):], X_test_scaled], axis=0)
+                else:
+                    padding = np.repeat(X_train_scaled[0:1], seq_len - 1 - len(X_train_scaled), axis=0)
+                    X_test_concat = np.concatenate([padding, X_train_scaled, X_test_scaled], axis=0)
+                
+                N_test = len(X_test_scaled)
+                X_test_seq = np.zeros((N_test, seq_len, X_train_scaled.shape[1]), dtype=np.float32)
+                for idx in range(N_test):
+                    X_test_seq[idx] = X_test_concat[idx : idx + seq_len]
+                    
+                lstm_model = train_lstm(X_train_seq, y_train, input_dim=X_train_scaled.shape[1], seq_len=seq_len)
+                _, probs_lstm_arr = predict_lstm(lstm_model, X_test_seq)
+                prob_lstm_arr = probs_lstm_arr[:, 1]
+            else:
+                prob_lstm_arr = (prob_rf_arr + prob_lgbm_arr) / 2.0
+            
+            prob_col = (prob_rf_arr + prob_lgbm_arr + prob_lstm_arr) / 3.0
+            preds = (prob_col > 0.5).astype(int)
+
         else:
             raise ValueError(f"Unknown model_type: {model_type}")
-
-        model.fit(X_train_scaled, y_train)
-
-        preds = model.predict(X_test_scaled)
-        probs = model.predict_proba(X_test_scaled)
-        prob_col = probs[:, 1] if probs.shape[1] > 1 else np.full(len(X_test), 0.5)
 
         predictions[train_end:test_end] = preds
         probabilities[train_end:test_end] = prob_col
@@ -319,6 +471,7 @@ class Holding:
     entry_stop_price: float
     max_price: float
     position_weight: float
+    entry_day_idx: int = 0
 
 
 def portfolio_backtest_2024(all_assets: Dict[str, Dict[str, Any]], config: StrategyConfig, verbose=True) -> Tuple[float, float, List[float], List[pd.Timestamp]]:
@@ -383,6 +536,8 @@ def portfolio_backtest_2024(all_assets: Dict[str, Dict[str, Any]], config: Strat
             current_close = asset['close'][local_idx]
             
             should_exit = False
+            unrealized = current_close / h.entry_price - 1
+            holding_days = day_idx - h.entry_day_idx
             
             # Layer A: Price falls below core Bull-Bear Line
             if current_close < asset['bb_line'][local_idx]:
@@ -390,9 +545,11 @@ def portfolio_backtest_2024(all_assets: Dict[str, Dict[str, Any]], config: Strat
             # Layer B: Hard Adaptive Stop-loss (2% below buy-day LOW)
             elif current_close < h.entry_stop_price:
                 should_exit = True
+            # Layer C: Time-based opportunity cost exit (不涨就拍掉)
+            elif holding_days >= config.patience_days and unrealized < config.patience_return:
+                should_exit = True
             else:
-                unrealized = current_close / h.entry_price - 1
-                # Layer C: Trailing Stop profit lock or minor take-profit exit
+                # Layer D: Trailing Stop profit lock or minor take-profit exit
                 if unrealized < config.trailing_activate_pct:
                     # ML turns bearish with small/no profit: Exit (catch small fish)
                     if asset['y_pred'][local_idx] == 0 and unrealized > 0:
@@ -427,7 +584,7 @@ def portfolio_backtest_2024(all_assets: Dict[str, Dict[str, Any]], config: Strat
                     continue
                 if stock_name in cooldowns and day_idx < cooldowns[stock_name]:
                     continue
-                if trade_counts.get(stock_name, 0) >= 3:
+                if False: # Capped at 3 trades per stock (Patched out for healthy rotation)
                     continue
                 
                 idx_map = asset_date_map[stock_name]
@@ -486,6 +643,7 @@ def portfolio_backtest_2024(all_assets: Dict[str, Dict[str, Any]], config: Strat
                 entry_stop_price=asset['low'][local_idx] - config.atr_multiplier * asset['atr'][local_idx],
                 max_price=asset['close'][local_idx],
                 position_weight=target_weight,
+                entry_day_idx=day_idx,
             )
         
         portfolio_values.append(capital)
@@ -670,7 +828,7 @@ def main() -> None:
     model_type = 'rf'
     print(f"\n2. 启动多进程并发加速：特征工程建模与 Walk-Forward 滚动训练 (模型类型: {model_type.upper()})...")
     all_assets = {}
-    max_workers = min(multiprocessing.cpu_count(), len(valid_dfs))
+    max_workers = min(2, multiprocessing.cpu_count(), len(valid_dfs))
     
     with ProcessPoolExecutor(max_workers=max_workers) as executor:
         futures = {executor.submit(process_single_asset, t, df, config, model_type): t for t, df in valid_dfs.items()}

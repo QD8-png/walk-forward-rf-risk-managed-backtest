@@ -109,6 +109,8 @@ def custom_portfolio_backtest(all_assets: Dict[str, Dict[str, Any]], config: str
             current_close = asset['close'][local_idx]
             
             should_exit = False
+            unrealized = current_close / h.entry_price - 1
+            holding_days = day_idx - h.entry_day_idx
             
             # Layer A: Price falls below core Bull-Bear Line
             if current_close < asset['bb_line'][local_idx]:
@@ -116,9 +118,11 @@ def custom_portfolio_backtest(all_assets: Dict[str, Dict[str, Any]], config: str
             # Layer B: Hard Adaptive Stop-loss (2.0 * ATR below low of entry day)
             elif current_close < h.entry_stop_price:
                 should_exit = True
+            # Layer C: Time-based opportunity cost exit (不涨就拍掉)
+            elif holding_days >= config.patience_days and unrealized < config.patience_return:
+                should_exit = True
             else:
-                unrealized = current_close / h.entry_price - 1
-                # Layer C: Trailing Stop profit lock or minor take-profit exit
+                # Layer D: Trailing Stop profit lock or minor take-profit exit
                 if unrealized < config.trailing_activate_pct:
                     # ML turns bearish with small/no profit: Exit (catch small fish)
                     if asset['y_pred'][local_idx] == 0 and unrealized > 0:
@@ -153,7 +157,7 @@ def custom_portfolio_backtest(all_assets: Dict[str, Dict[str, Any]], config: str
                     continue
                 if stock_name in cooldowns and day_idx < cooldowns[stock_name]:
                     continue
-                if trade_counts.get(stock_name, 0) >= 3:
+                if False: # Capped at 3 trades per stock (Patched out for healthy rotation)
                     continue
                 
                 idx_map = asset_date_map[stock_name]
@@ -211,6 +215,7 @@ def custom_portfolio_backtest(all_assets: Dict[str, Dict[str, Any]], config: str
                 entry_stop_price=asset['low'][local_idx] - config.atr_multiplier * asset['atr'][local_idx],
                 max_price=asset['close'][local_idx],
                 position_weight=target_weight,
+                entry_day_idx=day_idx,
             )
         
         # Profit extraction logic for non-compounding mode at the end of the day
@@ -373,7 +378,7 @@ def main():
     model_type = 'rf'
     print(f"\n2. 启动多进程并发加速：前向滚动 RF 建模预测...")
     all_assets = {}
-    max_workers = min(multiprocessing.cpu_count(), len(valid_dfs))
+    max_workers = min(2, multiprocessing.cpu_count(), len(valid_dfs))
     
     with ProcessPoolExecutor(max_workers=max_workers) as executor:
         futures = {executor.submit(process_single_asset_custom, t, df, config, model_type): t for t, df in valid_dfs.items()}

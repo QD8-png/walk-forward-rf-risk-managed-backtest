@@ -1,0 +1,7 @@
+﻿System,Total_Return,Max_Drawdown,Sharpe_Ratio
+System 1: Pure ML Baseline,1.59%,-19.83%,-0.1679
+System 2: ML + ATR Stop,24.51%,-20.07%,0.2898
+System 3: ML + ATR + BBL,14.71%,-27.87%,0.0769
+System 4: ML + ATR + BBL + TOCE,36.73%,-21.07%,0.4014
+System 5: Full ARMS Framework,0.99%,-16.61%,-0.2693
+Benchmark: Buy & Hold (B&H),102.47%,-28.54%,N/A

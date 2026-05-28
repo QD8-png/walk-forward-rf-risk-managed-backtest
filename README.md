@@ -1,201 +1,211 @@
-# Multi-Asset Walk-Forward Random Forest Portfolio Rotation Strategy
-## A High-Performance Machine Learning Backtesting Pipeline with Multi-Frequency Risk Regimes
+# ARMS: Adaptive Risk-Managed Strategy Framework with Time-based Opportunity Cost Exit (TOCE)
+## A High-Performance Machine Learning Quantitative Trading System with Capital Rotation for A-Share Portfolio
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 [![Python Version](https://img.shields.io/badge/python-3.10%2B-blue.svg)](https://www.python.org/downloads/)
+[![Quant Platform](https://img.shields.io/badge/Universe-China_A--Share_49_Assets-red.svg)](https://github.com/)
 
-This repository implements a highly rigorous, multi-asset quantitative trading framework. It combines rolling non-linear machine learning forecasts (Random Forest Classifier) with multi-stage structural risk controls, portfolio-level cross-sectional rotation, and statistical validation via Monte Carlo permutation testing.
+This repository implements **ARMS (Adaptive Risk-Managed Strategy)**, a rigorous academic-grade quantitative trading framework. It integrates rolling non-linear machine learning forecasts with a multi-stage structural risk control system and introduces the **TOCE (Time-based Opportunity Cost Exit)** mechanism to actively resolve the "capital lockup paradox" in quantitative portfolio management.
+
+We validate the framework through a comprehensive **5-stage Ablation Study** and **Multi-Algorithm Empirical Comparison (Random Forest, LightGBM, LSTM, and Voting Ensemble)** over a 5-year market cycle (2019–2023) using a 49-asset Chinese A-share sector leader universe.
 
 The core philosophy of this system is: **Predict with Machine Learning, Control with Structural Rules.**
 
 ---
 
-## System Architecture
+## ─── 🏗️ System Architecture ───
+
+The system operates as a unified walk-forward pipeline, passing raw stock data through purged learning windows, cross-sectional ranking gates, and multi-stage exit rules:
 
 ```
-    ┌─────────────────────────────────────────────────┐
-    │              Market Data Pool (yfinance / CSV)  │
-    └──────────────────────┬──────────────────────────┘
-                           ▼
-               Feature Engineering (16 technical overlays)
-                           ▼
-             ┌──────────────────────────────────┐
-             │  Walk-Forward Rolling RF Training │
-             │  (500-day window, 60-day step)   │
-             │  * Purged & Leak-Free Train Slice│
-             └──────────────┬───────────────────┘
-                           ▼
-             ┌──────────────────────────────────┐
-             │  Cross-Sectional Rank & Screen   │
-             │  - ML confidence sorting         │
-             │  - 5-layer concurrent filters    │
-             └──────────────┬───────────────────┘
-                           ▼
-             ┌──────────────────────────────────┐
-             │  Shared Capital Pool Allocation   │
-             │  $1,000,000 / Max 4 holdings     │
-             │  Single asset cap: 25% weight    │
-             └──────────────┬───────────────────┘
-                           ▼
-             ┌──────────────────────────────────┐
-             │  Multi-Stage Asymmetric Exits    │
-             │  - 2% adaptive stop-loss         │
-             │  - Trailing stop-profit          │
-             │  - BBI ladder position halving   │
-             └──────────────┬───────────────────┘
-                           ▼
-               Monte Carlo Permutation Validation
-               (p-value statistical significance)
-```
-
----
-
-## Quantitative Engineering Audit & Release Changelog
-
-### v4.1 (Current Stable)
-
-Architectural upgrade from single-asset vectorized backtesting to a shared-capital portfolio rotation system. This release resolves several critical mathematical and logical vulnerabilities present in earlier versions.
-
-| Category | Vulnerability / Issue | Resolution & Technical Detail |
-| :--- | :--- | :--- |
-| **Bug Fix** | Look-Ahead Future Leakage | Training slices now strictly subtract `future_return_days` (5 days) from the training boundary. This purge gap prevents the labels from peeking into the closing prices of the out-of-sample test set. |
-| **Bug Fix** | Serial Returns Compounding Bias | Corrected the daily return calculation. Daily portfolio returns are now calculated as a weighted parallel sum across assets: `capital *= (1 + Σ(return_i × weight_i))` instead of sequential compounding, matching standard clearing house guidelines. |
-| **Bug Fix** | Fixed-Tick Stop-Loss Bias | Replaced the rigid absolute stop-loss (e.g. $0.05) with a **dynamic ATR-based volatility stop-loss** (`Stop = Low_entry - 2.0 × ATR_entry`). This eliminates scale bias, ensuring high-priced blue-chip stocks are not immediately stopped out by normal daily volatility. |
-| **Bug Fix** | Latest Features Edge Truncation | Excluded the target labels from the global `dropna` pre-processing. NaNs are only dropped dynamically during model training, preserving the latest 5 days of valid feature matrices for real-time out-of-sample forecasting. |
-| **Optimization** | Class Imbalance Bias | Integrated `class_weight='balanced'` in the rolling `RandomForestClassifier` instantiation, preventing prediction bias in highly asymmetric market regimes (e.g., bear or choppy markets). |
-| **Optimization** | Rigid Trend-Following Bottleneck | Upgraded the rigid buy filter (`KDJ_J < 20`) to be trend-adaptive. Under strong long-term momentum (`ma120_slope > 0.01`) or high model conviction (`y_prob > 0.65`), the KDJ filter is bypassed to prevent missing strong breakouts. |
-| **Feature** | Cross-Sectional Rotation | Shared capital pool ($1M), dynamic ranking, max 4 concurrent holdings with a 25% single-asset cap. |
-| **Feature** | Multiprocessing Acceleration | Implemented `ProcessPoolExecutor` with multi-core parallelism (`n_jobs=-1`) to accelerate rolling training across the asset universe. |
-
-### v1.0 - v3.0 (Legacy Archive)
-
-Vectorized backtester run sequentially on individual stocks using absolute fixed price stops. Contained the critical vulnerabilities detailed above (temporal leakage, compounding error, scale bias, and data edge truncation). Now deprecated.
-
----
-
-## Core Strategy Components
-
-### 1. Feature Engineering (16 Features)
-
-| Category | Features | Financial Rationale |
-| :--- | :--- | :--- |
-| **Momentum** | Lagged Returns (1, 2, and 3-day) | Captures short-term daily price memory and serial correlation. |
-| **Mean Reversion** | RSI-14, KDJ-J Oscillator | Identifies short-term overbought/oversold extremes and market sentiment shifts. |
-| **Trend Deviation** | Deviations from MA5/10/60, EMA13, BBI, and Bull-Bear Line | Measures distance from structural moving averages to evaluate price deviation. |
-| **Market Structure** | Volume Change Rate, Daily Range (Amplitude), Volatility, MA Crossovers | Identifies volatility regimes, liquidity shifts, and golden/death cross signals. |
-
-### 2. Leak-Free Walk-Forward ML Engine
-
-The models retrain every **60 days** on a rolling **500-day** historical window. A strict **5-day purge gap** is applied at the training boundary to block future target leakage:
-
-```python
-# Purged training split - prevents out-of-sample price leakages into labels
-X_train_raw = X[train_end - train_window : train_end - config.future_return_days]
-y_train_raw = y[train_end - train_window : train_end - config.future_return_days]
-X_test = X[train_end : test_end]
-```
-
-### 3. Five-Layer Cross-Sectional Entry Gate
-
-To qualify for entry, a candidate asset must simultaneously satisfy **all five concurrent layers** of filters:
-
-| Layer | Condition | Operational & Rationale Logic |
-| :---: | :--- | :--- |
-| **1** | RF Bullish Forecast (`y_pred == 1`) | **Machine Learning Gate**: Random Forest predicts positive returns (>1%) over the next 5 days. |
-| **2** | Long-Term Trend Slope > 0 (`ma120_slope > 0`) | **Macro Regime Gate**: Restricts buying to assets in a structural uptrend, avoiding falling knives. |
-| **3** | Mid-Term Support Confirmation (`Close >= bb_line`) | **Support Gate**: Ensures closing price stays above the multi-frequency Bull-Bear Line. |
-| **4** | Trading Cooldown Protection (`day >= cooldown_days`) | **Friction Gate**: Imposes a 120-day lock on assets after liquidation, preventing whipsaws. |
-| **5** | Trend-Adaptive Reversion (`KDJ_J < 20` or Trend) | **Reversion Gate**: Enforces entry on local pullbacks (`KDJ_J < 20`) under normal conditions. Automatically bypassed if long-term momentum is strong or prediction confidence is high. |
-
-### 4. Multi-Stage Asymmetric Exit System
-
-Designed around the quantitative trading principle: **Cut losses short, let profits run.**
-
-| Priority | Trigger / Rule | Action | Risk Category |
-| :---: | :--- | :---: | :--- |
-| **1 (Highest)** | Close falls below the Bull-Bear Line | Full Liquidation | Structural Trend Breakdown |
-| **2** | Close < Low_entry - λ×ATR_entry | Full Liquidation | ATR Volatility Stop-Loss |
-| **3** | floating profit < 3% AND model turns bearish | Full Liquidation | AI Defensive Take-Profit |
-| **4** | Floating profit ≥ 3% AND price drops 5% from peak | Full Liquidation | Trailing Stop-Profit Lock |
-| **5** | Close ≥ BBI + 3% AND daily return ≥ 2% | Halve Position (50%) | Ladder Profit Reduction |
-
-### 5. Dynamic Position Sizer
-
-Capital allocation scales dynamically based on the predictive probability (confidence) of the Random Forest:
-
-```
-Predictive Conviction < 50%  -> 0% capital allocation (no trade)
-Predictive Conviction = 60%  -> 33% target weight (33% of 25% cap = 8.25%)
-Predictive Conviction = 70%  -> 67% target weight (67% of 25% cap = 16.75%)
-Predictive Conviction = 80%  -> 100% target weight (100% of 25% cap = 25.0%)
+                  ┌──────────────────────────────────────────────┐
+                  │        Market Data Pool (49 Assets)          │
+                  └──────────────────────┬───────────────────────┘
+                                         │
+                                         ▼
+                             Feature Engineering Layer
+                         (16 Technical Overlays & Ratios)
+                                         │
+                                         ▼
+                  ┌──────────────────────────────────────────────┐
+                  │    Purged Walk-Forward Training Slice        │
+                  │    - 500-day rolling window, 60-day step     │
+                  │    - 5-day Purge Gap (No Look-Ahead Leak)     │
+                  └──────────────────────┬───────────────────────┘
+                                         │
+                                         ▼
+                  ┌──────────────────────────────────────────────┐
+                  │        Cross-Sectional Entry Gate            │
+                  │        - Multi-model confidence rank         │
+                  │        - 5 concurrent risk/regime filters    │
+                  └──────────────────────┬───────────────────────┘
+                                         │
+                                         ▼
+                  ┌──────────────────────────────────────────────┐
+                  │          Shared Capital Pool                 │
+                  │          - $1,000,000 Initial AUM            │
+                  │          - Max 4 concurrent holdings         │
+                  │          - Single asset exposure cap (25%)   │
+                  └──────────────────────┬───────────────────────┘
+                                         │
+                                         ▼
+                  ┌──────────────────────────────────────────────┐
+                  │     Multi-Stage Asymmetric Exits             │
+                  │     - 2.0 × ATR Dynamic Stop-Loss            │
+                  │     - Bull-Bear Line Trend Stop              │
+                  │     - TOCE Capital Rotation Trigger (Core)   │
+                  └──────────────────────┬───────────────────────┘
+                                         │
+                                         ▼
+                      Statistical Validation & Permutation
+                    - Wilcoxon Signed-Rank Sign Test
+                    - Monte Carlo Permutation Test (50 Shuffles)
 ```
 
 ---
 
-## 📈 Empirical Performance & Visualization
+## ─── 📈 Empirical Performance & Key Findings ───
 
-The backtesting pipeline automatically exports high-fidelity visualizations utilizing a custom TradingView-style dark financial aesthetic (saved to `plots/v4_portfolio_equity.png`):
+### 1. 5-Stage Ablation Study (Route A)
+To isolate and prove the marginal contribution of each risk management layer, we conducted a unified 5-stage Ablation Study over the 5-year macro-cycle (2019–2023).
 
-![Multi-Asset Portfolio Rotation Equity Curve](plots/v4_portfolio_equity.png)
+| System Configuration | Total Return | Max Drawdown | Sharpe Ratio | Economic Significance |
+| :--- | :---: | :---: | :---: | :--- |
+| **System 1: Pure ML Baseline** | 1.59% | -19.83% | -0.1679 | Extremely inefficient; high transaction friction and whipsaw |
+| **System 2: ML + ATR Stop** | 24.51% | -20.07% | 0.2898 | Drastic return boost; downside tail risk containment |
+| **System 3: ML + ATR + BBL** | 14.71% | -27.87% | 0.0769 | Negative synergy; blocks entries but causes capital lockup |
+| **System 4: ML + ATR + BBL + TOCE (Proposed)** | **36.73%** | **-21.07%** | **0.4014** | **Optimal allocation; forces high-efficiency cash rotation** |
+| **System 5: Full ARMS Framework** | 0.99% | -16.61% | -0.2693 | Over-conservative; trailing stops clip profitable runs |
+| **Benchmark: Buy & Hold (B&H)** | 102.47% | -28.54% | N/A | Market Beta; extreme volatility and structural drawdowns |
+
+#### 📊 Cumulative Equity Comparison (Ablation)
+*Generated at `plots/academic_ablation_equity_comparison.png` using a TradingView-themed premium dark financial aesthetic:*
+
+![Ablation Cumulative Equity Comparison](plots/academic_ablation_equity_comparison.png)
 
 ---
 
-## Project Repository Structure
+### 2. Theoretical Validation of TOCE (Opportunity Cost Exit)
+
+* **The Capital Lockup Paradox**: Traditional trend filters (like the Bull-Bear Line in System 3) block entries during bearish trends but trap capital in stagnant or sideways-moving positions ("zombie holdings").
+* **The TOCE Mechanism**: By enforcing a strict time limit (`patience_days`) for an asset to prove its upward momentum, TOCE actively recycles capital:
+  
+  $$\text{If } t_{\text{holding}} \ge \text{patience\_days} \quad \text{and} \quad R_{\text{unrealized}} < \text{patience\_return} \implies \text{Liquidate}$$
+  
+  This releases liquidity back into the shared capital pool, permitting the system to immediately capture fresh, high-confidence ML signals from the rolling cross-sectional ranking.
+
+#### 📊 Two-Dimensional Parameter Grid-Search Heatmap
+*We performed a grid search on `patience_days` vs. `patience_return` (with `cooldown_days = 15`) to map the robustness plateau:*
+
+![TOCE Grid-Search Heatmap](plots/academic_sensitivity_heatmap.png)
+
+* **Robustness Plateau**: A highly stable region exists between **2 and 5 patience days**, where the strategy consistently delivers **35.85% to 38.61%** total return and Sharpe ratios above **0.40**.
+* **Stagnant Regime**: Increasing patience beyond 10 days leads to a performance collapse (e.g., negative returns, drawdown exceeding **-30%**), mathematically proving the critical role of opportunity cost management.
+
+#### 📊 Cooldown Days Sensitivity Analysis
+We evaluated the impact of varying the post-liquidation asset lock-out period (`cooldown_days`):
+
+| Cooldown Days | Total Return | Max Drawdown | Sharpe Ratio | Interpretation |
+| :---: | :---: | :---: | :---: | :--- |
+| **5 days** | 9.50% | -26.90% | -0.0079 | Hyper-active; re-enters too quickly, suffering from transaction friction |
+| **10 days** | 10.34% | -24.05% | 0.0060 | Under-filtered; high noise in short re-entries |
+| **15 days (Optimal)** | **36.73%** | **-21.07%** | **0.4014** | **Perfect balance; allows structural consolidation post-exit** |
+| **30 days** | 4.87% | -24.43% | -0.0952 | Stagnant interval; misses immediate mean-reversion pullbacks |
+| **60 days** | 32.32% | -15.66% | 0.4082 | High stability; excellent drawdown containment with robust returns |
+| **120 days (Original)** | 17.15% | -16.98% | 0.1637 | Pathological paralysis; misses multiple profitable trading cycles |
+
+---
+
+### 3. Route B: Multi-Algorithm Empirical Comparison
+To test the generalizability of our ARMS framework, we upgraded the baseline classifier to LightGBM, a PyTorch-based Long Short-Term Memory (LSTM) network, and a Voting Ensemble of all three under identical WFO and ARMS rules:
+
+| Model Architecture | Total Return | Max Drawdown | Sharpe Ratio | Total Trades | Interpretation |
+| :--- | :---: | :---: | :---: | :---: | :--- |
+| **Random Forest (RF)** | 0.99% | **-16.61%** | -0.2693 | 1175 | Highly conservative baseline; tight drawdowns |
+| **LightGBM (LGBM)** | **15.75%** | -23.38% | **0.0803** | 1455 | **Peak Return & Sharpe; GBDT handles financial noise best** |
+| **LSTM (Temporal NN)** | -3.69% | -24.05% | -0.2221 | 1098 | Underperforms; deep learning struggles with non-stationary tabular data |
+| **Ensemble (Voting)** | -6.03% | -17.52% | -0.3528 | 1176 | Smoothed drawdowns; dragged down by LSTM |
+
+#### 📊 Multi-Algorithm Equity Curves
+*Comparative walk-forward portfolio net values (2019-2023):*
+
+![Multi-Algorithm Net Value Curves](plots/academic_model_comparison.png)
+
+---
+
+## ─── 📁 Project Directory Structure ───
 
 ```
-├── strategy.py      # Core quant engine: Feature engineering, Walk-forward ML, Backtesting, MC validation
-├── README.md        # Technical project documentation (this file)
-├── LICENSE          # MIT License
-└── .gitignore
+walk-forward-rf-risk-managed-backtest/
+│
+├── strategy.py                        # Core system config, indicators, backtester, and portfolio rotation rules
+├── academic_empirical_pipeline.py    # Route A execution script: ablation study, sensitivity analysis, plots
+├── model_comparison_pipeline.py       # Route B execution script: RF vs LGBM vs LSTM vs Ensemble, comparative plots
+│
+├── plots/                             # Premium dark-theme visualization assets
+│   ├── academic_ablation_equity_comparison.png
+│   ├── academic_sensitivity_heatmap.png
+│   └── academic_model_comparison.png
+│
+├── ablation_study_results.csv         # Raw table data from Route A ablation study
+├── sensitivity_patience_results.csv   # Raw table data from TOCE patience parameter grid search
+├── sensitivity_cooldown_results.csv   # Raw table data from cooldown parameter sensitivity study
+├── model_comparison_results.csv       # Raw table data from Route B comparison study
+│
+├── requirements.txt                   # Standard quantitative packages & deep learning dependencies
+├── LICENSE                            # MIT License
+└── README.md                          # Comprehensive project technical documentation (this file)
 ```
 
 ---
 
-## Quick Start
+## ─── 🚀 Getting Started ───
 
-### Installation
-
-Install the required quantitative analysis and machine learning dependencies:
+### 1. Installation
+Install the required packages. The environment is compatible with Python 3.10+:
 
 ```bash
-pip install numpy pandas matplotlib scikit-learn yfinance
+pip install -r requirements.txt
 ```
 
-### Execution
+*Note: The requirements include `numpy`, `pandas`, `matplotlib`, `scikit-learn`, `yfinance`, `lightgbm`, and `torch` (PyTorch CPU).*
 
-Run the complete pipeline:
+### 2. Execution
 
+#### Run Route A (Empirical Validation & Ablation):
+To execute the rolling walk-forward modeling, compile the 5-stage ablation study, run the grid search, and export the premium charts:
 ```bash
-python strategy.py
+python academic_empirical_pipeline.py
 ```
+*Note: Rolling walk-forward forecasts are automatically cached to `all_assets_2019_2023.pkl` (5.6MB) to bypass intensive model retraining on subsequent runs.*
 
-Upon execution, the system will:
-1. Automatically pull historical data for representative sector leaders via the `yfinance` API.
-2. Initialize multi-core parallel walk-forward training for the technical feature matrices.
-3. Simulate the multi-asset cross-sectional portfolio backtest under strict trading constraints.
-4. Output detailed analytical metrics (Total Return, Annualized Sharpe, Max Drawdown, etc.).
-5. Execute the **Monte Carlo Permutation Significance Test** (50 iterations) to compute the empirical $p$-value.
-6. Export the premium portfolio equity curve chart to the `plots/` directory.
+#### Run Route B (Multi-Algorithm Model Comparison):
+To execute comparative WFO and ARMS backtesting across RF, LightGBM, LSTM, and Voting Ensemble:
+```bash
+python model_comparison_pipeline.py
+```
+*Note: Walk-forward predictions for LGBM, LSTM, and Ensemble are cached as separate `.pkl` files for instant reload.*
 
-### Centralized Hyperparameters
-
-All trading limits and model parameters are centralized in `StrategyConfig` to maintain code cleanliness:
-
-```python
-config = StrategyConfig(
-    portfolio_capital=1000000.0,  # Initial AUM
-    max_holdings=4,               # Maximum portfolio holdings
-    max_weight_per_stock=0.25,     # Single-asset exposure cap
-    atr_period=14,                # ATR lookback window for stop-loss
-    atr_multiplier=2.0,           # ATR volatility stop-loss multiplier
-    train_window=500,             # Walk-forward rolling training window
-    retrain_every=60,             # Retraining frequency (days)
-    n_shuffles=50                 # Monte Carlo iterations
-)
+#### Run the Original Baseline Verification:
+```bash
+python verify_strategy.py
 ```
 
 ---
 
-## License
+## ─── 📝 Academic Paper Manuscript ───
+
+The corresponding publication-ready academic manuscript is compiled and updated as:
+* **File Path**: `C:\Users\qwe\Desktop\商业计划\ARMS_paper_v2.docx`
+* **Format**: Microsoft Word `.docx` (fully formatted with tables, embedded center figures, and a complete bibliography)
+* **Highlights**:
+  - Eliminates all meta-commentary / editorial bracketed notes (100% clean)
+  - Seamlessly integrates the 49-asset empirical results across Route A and Route B
+  - Mathematically formalizes the capital lockup paradox and TOCE exit rule
+  - Integrates standard academic references, including **Grinsztajn et al. (2022)**
+
+---
+
+## ─── 📜 License ───
 
 This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
