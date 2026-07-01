@@ -91,7 +91,7 @@ class StrategyConfig:
     max_holdings: int = 4               # Absolute max parallel holdings
 
     # Statistical Validation
-    n_shuffles: int = 50                # Monte Carlo shuffles
+    n_shuffles: int = 2000                # Monte Carlo shuffles
     risk_free_rate: float = 0.02
 
 
@@ -684,33 +684,42 @@ def portfolio_backtest_2024(all_assets: Dict[str, Dict[str, Any]], config: Strat
 # ==============================================================================
 # 4. Statistical Validation via Monte Carlo
 # ==============================================================================
+def _monte_carlo_worker(args: Tuple[Dict[str, Dict[str, Any]], StrategyConfig, int]) -> float:
+    """Worker function for parallel Monte Carlo shuffles."""
+    all_assets, config, seed = args
+    rng = np.random.default_rng(seed=seed)
+    shuffled_assets = copy.deepcopy(all_assets)
+    for stock_name, asset in shuffled_assets.items():
+        n_len = len(asset['y_pred'])
+        idx = rng.permutation(n_len)
+        asset['y_pred'] = asset['y_pred'][idx]
+        asset['y_prob'] = asset['y_prob'][idx]
+    ret, _, _, _ = portfolio_backtest_2024(shuffled_assets, config, verbose=False)
+    return ret
+
 def portfolio_monte_carlo(all_assets: Dict[str, Dict[str, Any]], config: StrategyConfig, actual_return: float):
     """Executes a Monte Carlo permutation test by shuffling model predictions to evaluate Alpha validity."""
     print("\n" + "=" * 50)
-    print("正在启动组合级别蒙特卡洛置换检验...")
+    print("正在启动组合级别蒙特卡洛置换检验 (多进程并发加速)...")
     print(f"正在进行 {config.n_shuffles} 次随机信号置换，模拟纯抛硬币的表现...")
     print("=" * 50)
     
-    random_returns = []
     rng = np.random.default_rng(seed=config.random_state)
+    seeds = [int(rng.integers(0, 2**32 - 1)) for _ in range(config.n_shuffles)]
+    tasks_args = [(all_assets, config, seed) for seed in seeds]
+    random_returns = []
     
-    for i in range(config.n_shuffles):
-        # Deepcopy to avoid mutating source signals
-        shuffled_assets = copy.deepcopy(all_assets)
-        
-        # Shuffle temporal mapping of AI predictions
-        for stock_name, asset in shuffled_assets.items():
-            n_len = len(asset['y_pred'])
-            idx = rng.permutation(n_len)
-            asset['y_pred'] = asset['y_pred'][idx]
-            asset['y_prob'] = asset['y_prob'][idx]
-            
-        ret, _, _, _ = portfolio_backtest_2024(shuffled_assets, config, verbose=False)
-        random_returns.append(ret)
-        
-        if (i + 1) % 10 == 0:
-            print(f"  [Progress] 已完成随机模拟 {i + 1} / {config.n_shuffles} 次")
-            
+    # Use at most cpu_count() or 8 workers to prevent resource exhaustion
+    max_workers = min(multiprocessing.cpu_count(), 8)
+    print(f"  启动 {max_workers} 个并发进程进行置换计算...")
+    
+    with ProcessPoolExecutor(max_workers=max_workers) as executor:
+        futures = {executor.submit(_monte_carlo_worker, args): i for i, args in enumerate(tasks_args)}
+        for i, future in enumerate(as_completed(futures), 1):
+            random_returns.append(future.result())
+            if i % 100 == 0 or i == config.n_shuffles:
+                print(f"  [Progress] 已完成随机模拟 {i} / {config.n_shuffles} 次")
+                
     random_returns_arr = np.array(random_returns)
     p_value = np.mean(random_returns_arr >= actual_return)
     
@@ -772,7 +781,7 @@ def plot_portfolio_equity(dates: List[pd.Timestamp], values: List[float], asset_
         os.makedirs(os.path.dirname(os.path.abspath(save_path)), exist_ok=True)
         plt.savefig(save_path, facecolor='#0D1117', edgecolor='none', dpi=150)
         print(f"  [SAVE] 组合回测图表已成功保存: {save_path}")
-    plt.show()
+    plt.close()
 
 
 # ==============================================================================
