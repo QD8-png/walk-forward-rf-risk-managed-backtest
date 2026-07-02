@@ -453,13 +453,13 @@ def main():
     
     print("\n[SAVE] Exporting daily NAVs for Figure 2...")
     nav_df = pd.DataFrame({'Date': pd.to_datetime(s5_dates)})
-    nav_df['System 0-A\n(纯规则 S4)'] = r0a_vals
-    nav_df['System 1\n(纯ML)'] = r1_vals
-    nav_df['System 4\n(ML+ATR+BBL+TOCE)'] = r4_vals
-    nav_df['System 5\n(完整ARMS)'] = s5_vals
-    nav_df['MA均线交叉\n(5/20)'] = ma_vals
+    nav_df['System 0-A'] = r0a_vals
+    nav_df['System 1'] = r1_vals
+    nav_df['System 4'] = r4_vals
+    nav_df['System 5'] = s5_vals
+    nav_df['MA Crossover'] = ma_vals
     nav_df['B&H'] = bh_vals
-    nav_df.to_csv("equity_curves_117_pool.csv", index=False)
+    nav_df.to_csv("equity_curves_117_pool.csv", index=False, encoding='utf-8')
     print("       Saved to equity_curves_117_pool.csv")
     
     print("\n--- 4. Deep Analysis Outputs ---")
