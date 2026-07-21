@@ -21,8 +21,6 @@ from concurrent.futures import ProcessPoolExecutor, as_completed
 import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt
-from sklearn.ensemble import RandomForestClassifier
-import yfinance as yf
 
 # Ignore harmless warnings
 warnings.filterwarnings("ignore")
@@ -795,6 +793,215 @@ def get_default_50_tickers() -> List[str]:
         "000977.SZ", "603019.SS", "601127.SS", "002230.SZ", "002050.SZ",
         "510300.SS", "512000.SS", "512480.SS", "512170.SS"
     ]
+
+
+def run_portfolio_backtest(
+    all_assets: Dict[str, Dict[str, Any]],
+    config: StrategyConfig,
+    enable_ml: bool = True,
+    enable_atr: bool = True,
+    enable_bbl: bool = True,
+    enable_toce: bool = True,
+    enable_full_exits: bool = True,
+    use_ma_crossover: bool = False,
+    start_date: Optional[pd.Timestamp] = None,
+    end_date: Optional[pd.Timestamp] = None
+) -> Dict[str, Any]:
+    """Unified backtest execution function supporting all ablation systems and custom date windows."""
+    capital = config.portfolio_capital
+    holdings: Dict[str, Holding] = {}
+    cooldowns: Dict[str, int] = {}
+    trade_log: List[Dict[str, Any]] = []
+
+    if start_date is None:
+        start_date = pd.Timestamp('2019-01-01')
+    if end_date is None:
+        end_date = pd.Timestamp('2023-12-31')
+
+    all_dates = set()
+    for asset in all_assets.values():
+        all_dates.update(asset['dates'])
+    all_dates = sorted(list(all_dates))
+    asset_date_map = {name: {d: i for i, d in enumerate(asset['dates'])} for name, asset in all_assets.items()}
+
+    portfolio_values = []
+    portfolio_dates = []
+
+    for day_idx, today in enumerate(all_dates):
+        today_ts = pd.Timestamp(today)
+        if today_ts < start_date or today_ts > end_date:
+            continue
+
+        daily_portfolio_return = 0.0
+        for stock_name in list(holdings.keys()):
+            h = holdings[stock_name]
+            if today not in asset_date_map[stock_name]:
+                continue
+            local_idx = asset_date_map[stock_name][today]
+            asset = all_assets[stock_name]
+            current_close = asset['close'][local_idx]
+            prev_close = asset['close'][local_idx - 1] if local_idx > 0 else current_close
+
+            if prev_close > 0:
+                daily_portfolio_return += (current_close / prev_close - 1) * h.position_weight
+            if current_close > h.max_price:
+                h.max_price = current_close
+
+        capital = capital * (1 + daily_portfolio_return)
+
+        # Risk check & exits
+        stocks_to_sell = []
+        for stock_name in list(holdings.keys()):
+            h = holdings[stock_name]
+            if today not in asset_date_map[stock_name]:
+                continue
+            local_idx = asset_date_map[stock_name][today]
+            asset = all_assets[stock_name]
+            current_close = asset['close'][local_idx]
+
+            should_exit = False
+            unrealized = current_close / h.entry_price - 1
+            holding_days = day_idx - h.entry_day_idx
+
+            if use_ma_crossover:
+                if asset['ma5'][local_idx] < asset['ma20'][local_idx]:
+                    should_exit = True
+
+            if enable_bbl and current_close < asset['bb_line'][local_idx]:
+                should_exit = True
+            elif enable_atr and current_close < h.entry_stop_price:
+                should_exit = True
+            elif enable_toce and holding_days >= config.patience_days and unrealized < config.patience_return:
+                should_exit = True
+            else:
+                if enable_full_exits:
+                    if unrealized < config.trailing_activate_pct:
+                        if enable_ml and asset['y_pred'][local_idx] == 0 and unrealized > 0:
+                            should_exit = True
+                    else:
+                        if h.max_price > h.entry_price and current_close < h.max_price * (1 - config.trailing_stop_pct):
+                            should_exit = True
+
+            if enable_ml and not should_exit and not enable_bbl and not enable_atr and not enable_toce and not enable_full_exits:
+                if asset['y_pred'][local_idx] == 0:
+                    should_exit = True
+
+            if should_exit:
+                stocks_to_sell.append(stock_name)
+            else:
+                if enable_full_exits:
+                    bbi_dev = current_close / asset['bbi'][local_idx] - 1
+                    is_bull = (current_close / asset['open'][local_idx] - 1) >= config.big_bull_threshold
+                    if bbi_dev >= config.bbi_dev_threshold and is_bull and h.position_weight > config.min_remaining_position * config.max_weight_per_stock:
+                        capital *= (1 - config.fee_rate * (h.position_weight / 2))
+                        h.position_weight /= 2
+
+        for stock_name in stocks_to_sell:
+            h = holdings[stock_name]
+            asset = all_assets[stock_name]
+            local_idx = asset_date_map[stock_name][today]
+            exit_price = asset['close'][local_idx]
+
+            raw_return = exit_price / h.entry_price - 1
+            net_return = raw_return - 2 * config.fee_rate
+
+            trade_log.append({
+                'stock': stock_name,
+                'entry_date': all_dates[h.entry_day_idx],
+                'exit_date': today,
+                'raw_return': raw_return,
+                'net_return': net_return
+            })
+
+            capital *= (1 - config.fee_rate * holdings[stock_name].position_weight)
+            cooldowns[stock_name] = day_idx + config.cooldown_days
+            del holdings[stock_name]
+
+        # Entries screening
+        candidates = []
+        if len(holdings) < config.max_holdings:
+            for stock_name, asset in all_assets.items():
+                if stock_name in holdings or (stock_name in cooldowns and day_idx < cooldowns[stock_name]):
+                    continue
+                if today not in asset_date_map[stock_name]:
+                    continue
+                local_idx = asset_date_map[stock_name][today]
+
+                if use_ma_crossover:
+                    if asset['ma5'][local_idx] > asset['ma20'][local_idx]:
+                        candidates.append((stock_name, asset['ma5'][local_idx] / asset['ma20'][local_idx]))
+                elif enable_ml:
+                    if asset['y_pred'][local_idx] != 1 or asset['ma120_slope'][local_idx] <= 0:
+                        continue
+                    if not (asset['ma120_slope'][local_idx] > 0.01 or asset['y_prob'][local_idx] > 0.65) and asset['kdj_j'][local_idx] >= config.kdj_panic_threshold:
+                        continue
+                    if asset['close'][local_idx] < asset['bb_line'][local_idx]:
+                        continue
+                    candidates.append((stock_name, asset['y_prob'][local_idx]))
+                else: # Pure Rules
+                    if asset['ma120_slope'][local_idx] <= 0:
+                        continue
+                    if asset['ma120_slope'][local_idx] <= 0.01 and asset['kdj_j'][local_idx] >= config.kdj_panic_threshold:
+                        continue
+                    if asset['close'][local_idx] < asset['bb_line'][local_idx]:
+                        continue
+                    candidates.append((stock_name, asset['ma120_slope'][local_idx]))
+
+        candidates.sort(key=lambda x: x[1], reverse=True)
+
+        for stock_name, score in candidates:
+            if len(holdings) >= config.max_holdings:
+                break
+            rem_cap = 1.0 - sum(h.position_weight for h in holdings.values())
+            if rem_cap <= 0.01:
+                break
+
+            if enable_ml and not use_ma_crossover:
+                raw_pos = min(config.max_position_size, max(config.min_position_size, (score - 0.5) * config.position_scale_factor))
+            else:
+                raw_pos = 1.0
+
+            target_weight = min(raw_pos * config.max_weight_per_stock, rem_cap)
+            if target_weight < 0.01:
+                continue
+
+            local_idx = asset_date_map[stock_name][today]
+            asset = all_assets[stock_name]
+            capital *= (1 - config.fee_rate * target_weight)
+            holdings[stock_name] = Holding(
+                name=stock_name,
+                entry_price=asset['close'][local_idx],
+                entry_stop_price=asset['low'][local_idx] - config.atr_multiplier * asset['atr'][local_idx],
+                max_price=asset['close'][local_idx],
+                position_weight=target_weight,
+                entry_day_idx=day_idx,
+            )
+
+        portfolio_values.append(capital)
+        portfolio_dates.append(today)
+
+    total_return = capital / config.portfolio_capital - 1
+    curve = pd.Series(portfolio_values)
+    mdd = ((curve - curve.cummax()) / curve.cummax()).min() if len(curve) > 0 else 0.0
+
+    daily_returns = curve.pct_change().dropna()
+    ann_factor = 252
+    n_days = len(portfolio_values)
+    ann_ret = (1 + total_return) ** (ann_factor / n_days) - 1 if n_days > 0 else 0
+    ann_vol = daily_returns.std() * np.sqrt(ann_factor) if len(daily_returns) > 0 else 0
+    sharpe = (ann_ret - config.risk_free_rate) / ann_vol if ann_vol != 0 else 0.0
+    calmar = ann_ret / abs(mdd) if mdd != 0 else 0.0
+
+    return {
+        'cum_return': total_return,
+        'max_drawdown': mdd,
+        'sharpe_ratio': sharpe,
+        'calmar_ratio': calmar,
+        'total_trades': len(trade_log),
+        'portfolio_values': portfolio_values,
+        'portfolio_dates': portfolio_dates,
+        'trade_log': trade_log
+    }
 
 
 def main() -> None:

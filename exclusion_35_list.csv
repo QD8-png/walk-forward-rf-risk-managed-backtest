@@ -1,0 +1,36 @@
+ticker,stock_name,status,filter_reason
+sz.300701,招企,Excluded,Insufficient historical length (< 600 trading days before WFO start)
+sh.600257,大湖股份,Excluded,Extended trading suspension (> 30 consecutive trading days)
+sh.600808,马钢股份,Excluded,Non-leader category / failed liquidity minimum threshold
+sh.603799,华友钴业,Excluded,Data completeness check failed (missing OHLCV segments)
+sh.600136,当代明诚,Excluded,ST/Delisting risk filter triggered
+sz.002909,集泰股份,Excluded,Insufficient historical length (< 600 trading days before WFO start)
+sh.603909,建建股份,Excluded,Non-leader category / failed liquidity minimum threshold
+sz.000793,华闻集团,Excluded,Extended trading suspension (> 30 consecutive trading days)
+sh.600741,华域汽车,Excluded,Non-leader category / failed liquidity minimum threshold
+sh.600303,曙光股份,Excluded,ST/Delisting risk filter triggered
+sz.002236,大华股份,Excluded,Non-leader category / failed liquidity minimum threshold
+sh.600585,海螺水泥,Excluded,Non-leader category / failed liquidity minimum threshold
+sz.002475,立讯精密,Excluded,Non-leader category / failed liquidity minimum threshold
+sh.601668,中国建筑,Excluded,Non-leader category / failed liquidity minimum threshold
+sz.000651,格力电器,Excluded,Non-leader category / failed liquidity minimum threshold
+sh.600016,民生银行,Excluded,Non-leader category / failed liquidity minimum threshold
+sz.000725,京东方A,Excluded,Non-leader category / failed liquidity minimum threshold
+sh.601601,中国太保,Excluded,Non-leader category / failed liquidity minimum threshold
+sz.002001,新 和 成,Excluded,Non-leader category / failed liquidity minimum threshold
+sh.600309,万华化学,Excluded,Non-leader category / failed liquidity minimum threshold
+sz.002410,广联达,Excluded,Non-leader category / failed liquidity minimum threshold
+sh.601888,中国中免,Excluded,Non-leader category / failed liquidity minimum threshold
+sz.300122,智飞生物,Excluded,Non-leader category / failed liquidity minimum threshold
+sh.603259,药明康德,Excluded,Non-leader category / failed liquidity minimum threshold
+sz.300124,汇川技术,Excluded,Non-leader category / failed liquidity minimum threshold
+sh.600893,航发动力,Excluded,Non-leader category / failed liquidity minimum threshold
+sz.002812,恩捷股份,Excluded,Non-leader category / failed liquidity minimum threshold
+sh.601012,隆基绿能,Excluded,Non-leader category / failed liquidity minimum threshold
+sz.002466,天齐锂业,Excluded,Non-leader category / failed liquidity minimum threshold
+sh.601985,中国核电,Excluded,Non-leader category / failed liquidity minimum threshold
+sz.002709,天赐材料,Excluded,Non-leader category / failed liquidity minimum threshold
+sh.600438,通威股份,Excluded,Non-leader category / failed liquidity minimum threshold
+sz.300408,三环集团,Excluded,Non-leader category / failed liquidity minimum threshold
+sh.601111,中国国航,Excluded,Non-leader category / failed liquidity minimum threshold
+sz.000100,TCL科技,Excluded,Non-leader category / failed liquidity minimum threshold
