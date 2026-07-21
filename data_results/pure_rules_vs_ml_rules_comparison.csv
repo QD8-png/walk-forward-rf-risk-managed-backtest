@@ -1,0 +1,5 @@
+﻿Model,Total Return,Max Drawdown,Sharpe Ratio,Trades
+"Pure Rules (S4 Rules, No ML)",27.98%,-60.40%,0.1060,643
+ML + Rules (System 4),36.73%,-21.07%,0.4014,571
+"Pure Rules (S5 Rules, No ML)",-33.54%,-53.72%,-0.5095,1029
+ML + Rules (System 5),0.99%,-16.61%,-0.2693,1175

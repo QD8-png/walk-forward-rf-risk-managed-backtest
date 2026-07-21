@@ -1,5 +1,0 @@
-﻿Model,Total_Return,Max_Drawdown,Sharpe_Ratio,Total_Trades
-RF,0.99%,-16.61%,-0.2693,1175
-LGBM,15.75%,-23.38%,0.0803,1455
-LSTM,-3.69%,-24.05%,-0.2221,1098
-ENSEMBLE,-6.03%,-17.52%,-0.3528,1176

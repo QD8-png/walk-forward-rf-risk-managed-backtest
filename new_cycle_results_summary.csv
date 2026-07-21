@@ -1,3 +1,0 @@
-﻿Mode,Universe_Size,Start_Date,End_Date,Total_Return,Annualized_Return,Annualized_Vol,Sharpe_Ratio,Max_Drawdown
-New Compounding (新复利),48,2019-01-01,2023-12-31,25.66%,4.86%,8.01%,0.3576,-13.36%
-New Non-compounding (新非复利/锁定利润),48,2019-01-01,2023-12-31,23.28%,4.45%,6.84%,0.3578,-10.32%

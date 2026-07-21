@@ -1,2 +1,0 @@
-period,retained_assets,total_assets,system,cum_return,max_drawdown,sharpe_ratio,calmar_ratio,mc_permuted_mean,mc_p_value_n2000
-2024 Full Year OOS (Concept Drift Test),49,49,System 4 (ML+ATR+BBL+TOCE),-0.0401,-0.1825,-0.1240,-0.2197,-0.0133,0.6730
